@@ -1,0 +1,28 @@
+#!/usr/sbin/nft -f
+# Zero-trust posture: peers never get L3 access to internal networks.
+# The only thing reachable over wg0 is the nginx L7 proxy on the gateway itself.
+# Only touch our own table: Docker's embedded DNS relies on NAT rules in this netns.
+add table inet ztna
+delete table inet ztna
+
+table inet ztna {
+  # Peers isolated by the orchestrator. Elements are managed by gw-agent.
+  set quarantine {
+    type ipv4_addr
+    flags timeout
+  }
+
+  chain input {
+    type filter hook input priority filter; policy accept;
+    iifname "wg0" ip saddr @quarantine counter drop
+    iifname "wg0" ct state established,related accept
+    iifname "wg0" icmp type echo-request accept
+    iifname "wg0" tcp dport 80 accept
+    iifname "wg0" counter drop
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+    iifname "wg0" counter drop
+  }
+}

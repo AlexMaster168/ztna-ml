@@ -1,0 +1,285 @@
+{
+  "version": "dense-ae-20261010-185057-04bbfb",
+  "model": {
+    "threshold": 0.35424932837486267,
+    "normal_windows": 6732,
+    "attack_windows": 1079,
+    "fpr": 0.00416,
+    "precision": 0.9667,
+    "recall": 0.7535,
+    "f1": 0.8469,
+    "roc_auc": 0.962,
+    "rules_fpr": 0.0,
+    "per_kind": {
+      "bruteforce": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 1.0,
+        "combined_recall": 1.0,
+        "model_only": 0
+      },
+      "enumeration": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 0.9917,
+        "combined_recall": 1.0,
+        "model_only": 1
+      },
+      "exfiltration": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 1.0,
+        "combined_recall": 1.0,
+        "model_only": 0
+      },
+      "odd-client": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 0.0,
+        "combined_recall": 1.0,
+        "model_only": 120
+      },
+      "scanner": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 1.0,
+        "combined_recall": 1.0,
+        "model_only": 0
+      },
+      "slow-bruteforce": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 0.0,
+        "combined_recall": 1.0,
+        "model_only": 120
+      },
+      "stealth-bruteforce": {
+        "windows": 120,
+        "model_recall": 0.1833,
+        "rules_recall": 0.0083,
+        "combined_recall": 0.1833,
+        "model_only": 21
+      },
+      "stealth-enumeration": {
+        "windows": 120,
+        "model_recall": 0.55,
+        "rules_recall": 0.0,
+        "combined_recall": 0.55,
+        "model_only": 66
+      },
+      "stealth-exfiltration": {
+        "windows": 119,
+        "model_recall": 0.042,
+        "rules_recall": 0.0504,
+        "combined_recall": 0.0924,
+        "model_only": 5
+      }
+    },
+    "episodes": {
+      "enumeration": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "odd-client": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "exfiltration": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "bruteforce": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "stealth-enumeration": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "scanner": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "slow-bruteforce": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "stealth-exfiltration": {
+        "episodes": 6,
+        "model": 5,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "stealth-bruteforce": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      }
+    }
+  },
+  "isolation_forest": {
+    "threshold": 0.6270684574139478,
+    "normal_windows": 6732,
+    "attack_windows": 1079,
+    "fpr": 0.00357,
+    "precision": 0.9557,
+    "recall": 0.4801,
+    "f1": 0.6391,
+    "roc_auc": 0.9399,
+    "rules_fpr": 0.0,
+    "per_kind": {
+      "bruteforce": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 1.0,
+        "combined_recall": 1.0,
+        "model_only": 0
+      },
+      "enumeration": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 0.9917,
+        "combined_recall": 1.0,
+        "model_only": 1
+      },
+      "exfiltration": {
+        "windows": 120,
+        "model_recall": 0.0417,
+        "rules_recall": 1.0,
+        "combined_recall": 1.0,
+        "model_only": 0
+      },
+      "odd-client": {
+        "windows": 120,
+        "model_recall": 0.0333,
+        "rules_recall": 0.0,
+        "combined_recall": 0.0333,
+        "model_only": 4
+      },
+      "scanner": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 1.0,
+        "combined_recall": 1.0,
+        "model_only": 0
+      },
+      "slow-bruteforce": {
+        "windows": 120,
+        "model_recall": 1.0,
+        "rules_recall": 0.0,
+        "combined_recall": 1.0,
+        "model_only": 120
+      },
+      "stealth-bruteforce": {
+        "windows": 120,
+        "model_recall": 0.2,
+        "rules_recall": 0.0083,
+        "combined_recall": 0.2,
+        "model_only": 23
+      },
+      "stealth-enumeration": {
+        "windows": 120,
+        "model_recall": 0.0417,
+        "rules_recall": 0.0,
+        "combined_recall": 0.0417,
+        "model_only": 5
+      },
+      "stealth-exfiltration": {
+        "windows": 119,
+        "model_recall": 0.0,
+        "rules_recall": 0.0504,
+        "combined_recall": 0.0504,
+        "model_only": 0
+      }
+    },
+    "episodes": {
+      "enumeration": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "odd-client": {
+        "episodes": 6,
+        "model": 4,
+        "combined": 4,
+        "median_windows_to_detect": 1.0
+      },
+      "exfiltration": {
+        "episodes": 6,
+        "model": 5,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "bruteforce": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "stealth-enumeration": {
+        "episodes": 6,
+        "model": 5,
+        "combined": 5,
+        "median_windows_to_detect": 1.0
+      },
+      "scanner": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "slow-bruteforce": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      },
+      "stealth-exfiltration": {
+        "episodes": 6,
+        "model": 0,
+        "combined": 6,
+        "median_windows_to_detect": 10.0
+      },
+      "stealth-bruteforce": {
+        "episodes": 6,
+        "model": 6,
+        "combined": 6,
+        "median_windows_to_detect": 1.0
+      }
+    }
+  },
+  "kind": "dense_ae",
+  "live_holdout": null,
+  "args": {
+    "out": "artifacts",
+    "seed": 1,
+    "hours": 3.0,
+    "normal_peers": 16,
+    "quick": false,
+    "redis_url": null,
+    "real_minutes": 0,
+    "holdout_minutes": 20,
+    "exclude_ip": [],
+    "real_weight": 5,
+    "model": "dense"
+  },
+  "onnx_max_abs_diff": 2.384185791015625e-06,
+  "train_windows": 6608,
+  "val_windows": 6605
+}

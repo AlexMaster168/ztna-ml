@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #ffffff;
+  /* single chart series; validated against both card surfaces */
+  --series: #2563eb;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+    --card: #18181b;
+    --series: #3b82f6;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+@layer components {
+  .input {
+    @apply block w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-700 dark:bg-zinc-950 dark:focus:ring-zinc-800;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300;
+  }
+  .btn-secondary {
+    @apply border border-zinc-300 bg-white hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800;
+  }
+  .btn-danger {
+    @apply border border-red-300 bg-white text-red-700 hover:bg-red-50 dark:border-red-900 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950;
+  }
+  .card {
+    @apply rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900;
+  }
+}
+
+.series {
+  stroke: var(--series);
+}
+.series-fill {
+  fill: var(--series);
+}
+.series-dot {
+  fill: var(--series);
+  stroke: var(--card);
+}

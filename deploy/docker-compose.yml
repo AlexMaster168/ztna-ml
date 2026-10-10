@@ -1,0 +1,322 @@
+name: ztna
+
+x-restart: &restart
+  restart: unless-stopped
+
+networks:
+  # Control plane: orchestrator, DB, cache, gateway management, protected services.
+  backend:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  # "Internet" side: only WireGuard UDP between peers and the gateway.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  pgdata:
+  redisdata:
+  wgstate:
+  pki:
+  peerconf:
+  pgbackups:
+  nginxlogs:
+  shipperstate:
+  models:
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ztna}
+      POSTGRES_USER: ${POSTGRES_USER:-ztna}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  pg-backup:
+    <<: *restart
+    image: postgres:16.4-alpine
+    entrypoint: ["/bin/sh", "/pg-backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-ztna}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-ztna}
+    volumes:
+      - ./backup/pg-backup.sh:/pg-backup.sh:ro
+      - pgbackups:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [backend]
+
+  redis:
+    <<: *restart
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  pki-init:
+    image: alpine:3.20
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache openssl >/dev/null && sh /gen-dev-pki.sh"]
+    volumes:
+      - ./pki/gen-dev-pki.sh:/gen-dev-pki.sh:ro
+      - pki:/pki
+
+  orchestrator:
+    <<: *restart
+    build: ../orchestrator
+    image: ztna-orchestrator
+    env_file: .env
+    environment: &orch-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-ztna}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ztna}
+      REDIS_URL: redis://redis:6379/0
+      MODELS_DIR: /models
+      GATEWAY_NAME: gw-1
+      GATEWAY_ENDPOINT: 172.31.0.10:51820
+      WG_SUBNET: 10.13.0.0/24
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend]
+    volumes:
+      - models:/models:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # Same image, only agent routes, mutual TLS enforced by gunicorn.
+  orchestrator-agent-api:
+    <<: *restart
+    image: ztna-orchestrator
+    env_file: .env
+    environment:
+      <<: *orch-env
+      AGENT_API: "1"
+      SKIP_MIGRATE: "1"
+    command:
+      - gunicorn
+      - ztna.wsgi:application
+      - --bind=0.0.0.0:8443
+      - --workers=2
+      - --certfile=/pki/server.crt
+      - --keyfile=/pki/server.key
+      - --ca-certs=/pki/ca.crt
+      - --cert-reqs=2
+    volumes:
+      - pki:/pki:ro
+    depends_on:
+      orchestrator: { condition: service_healthy }
+      pki-init: { condition: service_completed_successfully }
+    networks: [backend]
+
+  # Dev/simulation: issues peer configs like an admin would and hands them to the devices.
+  seed:
+    image: ztna-orchestrator
+    env_file: .env
+    environment:
+      <<: *orch-env
+      SKIP_MIGRATE: "1"
+    user: "0"
+    command: ["python", "manage.py", "seed_dev_peers", "--gateway", "gw-1", "--out", "/peers",
+              "peer-normal", "peer-normal-2", "peer-dev", "peer-attacker"]
+    volumes:
+      - peerconf:/peers
+    depends_on:
+      orchestrator: { condition: service_healthy }
+    networks: [backend]
+
+  trust-engine:
+    <<: *restart
+    image: ztna-orchestrator
+    env_file: .env
+    environment:
+      <<: *orch-env
+      SKIP_MIGRATE: "1"
+    command: ["python", "manage.py", "trust_engine"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>60)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      orchestrator: { condition: service_healthy }
+    networks: [backend]
+
+  log-shipper:
+    <<: *restart
+    build: ../services/log-shipper
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      GATEWAY_NAME: gw-1
+    volumes:
+      - nginxlogs:/var/log/nginx:ro
+      - shipperstate:/state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>60)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      redis: { condition: service_healthy }
+      gateway: { condition: service_healthy }
+    networks: [backend]
+
+  ml-worker:
+    <<: *restart
+    build: ../ml
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      # The active model and its mode (shadow/active) are selected in the dashboard;
+      # the worker follows the ml:model key in Redis.
+      MODELS_DIR: /models
+    volumes:
+      - models:/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>60)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [backend]
+
+  # On demand: docker compose --profile train run --rm ml-train
+  ml-train:
+    profiles: [train]
+    build:
+      context: ..
+      dockerfile: ml/Dockerfile.train
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - models:/models
+    networks: [backend]
+
+  protected-app:
+    <<: *restart
+    build: ../services/protected-app
+    networks: [backend]
+
+  gateway:
+    <<: *restart
+    build: ../gateway
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    environment:
+      WG_ADDRESS: 10.13.0.1/24
+      WG_LISTEN_PORT: "51820"
+      ORCHESTRATOR_AGENT_URL: https://orchestrator-agent-api:8443
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?set GATEWAY_TOKEN in deploy/.env}
+      TLS_CA: /pki/ca.crt
+      TLS_CERT: /pki/gw-1.crt
+      TLS_KEY: /pki/gw-1.key
+      RECONCILE_INTERVAL: "2"
+    volumes:
+      - wgstate:/var/lib/ztna/wg
+      - pki:/pki:ro
+      - nginxlogs:/var/log/nginx
+    depends_on:
+      protected-app: { condition: service_started }
+      pki-init: { condition: service_completed_successfully }
+    networks:
+      backend:
+        ipv4_address: 172.30.0.10
+      edge:
+        ipv4_address: 172.31.0.10
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  peer-normal:
+    <<: *restart
+    build: ../simulator/peer
+    image: ztna-peer
+    cap_add: [NET_ADMIN]
+    environment:
+      PEER_NAME: peer-normal
+    command: ["traffic", "browser"]
+    volumes:
+      - peerconf:/etc/ztna/peers:ro
+    depends_on:
+      gateway: { condition: service_healthy }
+    networks: [edge]
+
+  peer-normal-2:
+    <<: *restart
+    build: ../simulator/peer
+    image: ztna-peer
+    cap_add: [NET_ADMIN]
+    environment:
+      PEER_NAME: peer-normal-2
+    command: ["traffic", "browser"]
+    volumes:
+      - peerconf:/etc/ztna/peers:ro
+    depends_on:
+      gateway: { condition: service_healthy }
+    networks: [edge]
+
+  peer-dev:
+    <<: *restart
+    build: ../simulator/peer
+    image: ztna-peer
+    cap_add: [NET_ADMIN]
+    environment:
+      PEER_NAME: peer-dev
+    command: ["traffic", "developer"]
+    volumes:
+      - peerconf:/etc/ztna/peers:ro
+    depends_on:
+      gateway: { condition: service_healthy }
+    networks: [edge]
+
+  peer-attacker:
+    <<: *restart
+    build: ../simulator/peer
+    image: ztna-peer
+    cap_add: [NET_ADMIN]
+    environment:
+      PEER_NAME: peer-attacker
+    volumes:
+      - peerconf:/etc/ztna/peers:ro
+    depends_on:
+      gateway: { condition: service_healthy }
+    networks: [edge]
+
+  dashboard:
+    <<: *restart
+    build: ../dashboard
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8000
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [orchestrator]
+    networks: [backend]
+    ports:
+      - "127.0.0.1:3000:3000"

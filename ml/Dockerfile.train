@@ -1,0 +1,12 @@
+# Training image (build context: repo root). CPU-only torch keeps it a few hundred MB.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY ml/requirements.txt ml/requirements-train.txt ./
+RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir -r requirements-train.txt
+COPY ml/ztna_ml/ ztna_ml/
+# datagen.py replays the live simulator's behaviour profiles.
+COPY simulator/peer/traffic/ /simulator/peer/traffic/
+ENTRYPOINT ["python", "-m"]
+CMD ["ztna_ml.train", "--out", "/models"]

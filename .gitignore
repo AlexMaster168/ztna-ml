@@ -1,0 +1,12 @@
+deploy/.env
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+.next/
+*.onnx
+ml/data/
+e2e-run.log

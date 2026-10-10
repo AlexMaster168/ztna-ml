@@ -1,0 +1,4 @@
+[flake8]
+# The project lints with ruff (see pyproject.toml files); keep editor flake8 consistent.
+max-line-length = 120
+exclude = .venv,node_modules,migrations
