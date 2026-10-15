@@ -51,3 +51,14 @@ def test_state_roundtrip(tmp_path, monkeypatch):
     assert shipper.load_state() == (0, 0)
     shipper.save_state(42, 1000)
     assert shipper.load_state() == (42, 1000)
+
+
+def test_shard_routing_matches_ml_package():
+    import zlib
+
+    # Reference values computed with ztna_ml.shards.shard_of (crc32 of "gw|ip" mod n).
+    for gw, ip in [("gw-1", "10.13.0.2"), ("gw-2", "10.14.0.3")]:
+        assert shipper.shard_of(gw, ip, 8) == zlib.crc32(f"{gw}|{ip}".encode()) % 8
+    line = b'{"peer_ip":"10.13.0.2","status":200}'
+    assert shipper.stream_for(line) == f"traffic:http:{shipper.shard_of('gw-1', '10.13.0.2')}"
+    assert shipper.stream_for(b"garbage").startswith("traffic:http:")

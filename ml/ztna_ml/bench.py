@@ -28,17 +28,18 @@ def main() -> None:
         )
     reqs.sort(key=lambda r: r.ts)
     scorer = load_scorer(args.model) if args.model else None
-    det = Detector(scorer)
+    det = Detector(scorer)  # 3 hopping phases, as in production
 
     windows = 0
     t0 = time.perf_counter()
     model_time = 0.0
     for r in reqs:
         _, _, closed = det.on_request("gw-1", r)
-        for w in closed:
-            det.peer_rules("gw-1", w)
+        for phase, w in closed:
+            if phase == 0:
+                det.peer_rules("gw-1", w)
             m0 = time.perf_counter()
-            det.score_window(w, "gw-1")
+            det.score_window(w, "gw-1", phase)
             model_time += time.perf_counter() - m0
             windows += 1
     elapsed = time.perf_counter() - t0

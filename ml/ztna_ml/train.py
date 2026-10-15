@@ -22,7 +22,7 @@ import redis
 from . import datagen
 from .evaluate import evaluate
 from .features import FEATURES
-from .livecheck import collect_windows, score_report
+from .livecheck import Span, collect_windows, in_spans, score_report
 from .model import OnnxAutoencoder
 from .models import dense_ae, iforest, lstm_ae
 
@@ -32,24 +32,25 @@ def log(msg: str) -> None:
 
 
 def render_markdown(version: str, ae: dict, base: dict, info: dict) -> str:
+    """Human-readable report (Ukrainian; it is shown as is in the dashboard)."""
+    sequences = "train_sequences" in info
     lines = [
-        f"# Model {version}",
+        f"# Модель {version}",
         "",
-        f"Trained on {info.get('train_windows', info.get('train_sequences'))} normal "
-        f"{'sequences' if 'train_sequences' in info else 'windows'}; "
-        f"tested on {ae['normal_windows']} normal and "
-        f"{ae['attack_windows']} attack windows from an unseen simulated population.",
+        f"Навчено на {info.get('train_windows', info.get('train_sequences'))} нормальних "
+        f"{'послідовностях' if sequences else 'вікнах'}; перевірено на {ae['normal_windows']} "
+        f"нормальних і {ae['attack_windows']} атакуючих вікнах невідомої симульованої популяції.",
         "",
-        f"| Metric | {info.get('kind', 'dense_ae')} | IsolationForest |",
+        f"| Метрика | {info.get('kind', 'dense_ae')} | IsolationForest |",
         "|---|---|---|",
     ]
     for k in ["fpr", "precision", "recall", "f1", "roc_auc"]:
         lines.append(f"| {k} | {ae[k]} | {base[k]} |")
     lines += [
         "",
-        f"Rules alone: false-positive rate {ae['rules_fpr']} on normal windows.",
+        f"Лише правила: частка хибних спрацювань {ae['rules_fpr']} на нормальних вікнах.",
         "",
-        "| Attack | windows | rules recall | AE recall | rules+AE recall | caught only by AE |",
+        "| Атака | вікон | recall правил | recall AE | recall правила+AE | лише AE |",
         "|---|---|---|---|---|---|",
     ]
     for kind, s in ae["per_kind"].items():
@@ -60,14 +61,14 @@ def render_markdown(version: str, ae: dict, base: dict, info: dict) -> str:
     if live := info.get("live_holdout"):
         lines += [
             "",
-            "Real traffic holdout (most recent minutes, never used for training): "
-            f"{live['normal_windows']} normal windows, false-positive rate "
-            f"{live['normal_fpr']}; {live['attack_windows']} attacker windows, "
-            f"recall {live['attack_recall']}.",
+            "Відкладений реальний трафік (останні хвилини, у навчанні не використовувались): "
+            f"{live['normal_windows']} нормальних вікон, частка хибних спрацювань "
+            f"{live['normal_fpr']}; {live['attack_windows']} вікон атакуючих, "
+            f"recall {'—' if live['attack_recall'] is None else live['attack_recall']}.",
         ]
     lines += [
         "",
-        "| Attack | episodes | detected (rules+AE) | median windows to detect |",
+        "| Атака | епізодів | виявлено (правила+AE) | медіана вікон до виявлення |",
         "|---|---|---|---|",
     ]
     for kind, s in ae["episodes"].items():
@@ -90,7 +91,10 @@ def real_baseline(args) -> tuple[datagen.Dataset, datagen.Dataset, list]:
         (
             lw.window
             for lw in base
-            if not lw.rule_hit and lw.window.peer_ip not in excluded and lw.window.count >= 3
+            if not lw.rule_hit
+            and lw.window.peer_ip not in excluded
+            and not in_spans(lw.window, args.exclude_span)
+            and lw.window.count >= 3
         ),
         key=lambda w: w.start,
     )
@@ -138,6 +142,13 @@ def main() -> None:
         default=[],
         help="peer IPs that are not normal (attack simulators)",
     )
+    ap.add_argument(
+        "--exclude-span",
+        action="append",
+        type=Span.parse,
+        default=[],
+        help="ip,start,end: a peer's suspect traffic (unix seconds), e.g. around an incident",
+    )
     ap.add_argument("--real-weight", type=int, default=5, help="oversampling of real windows")
     ap.add_argument("--model", choices=["dense", "lstm"], default="dense")
     args = ap.parse_args()
@@ -182,7 +193,9 @@ def main() -> None:
     base_report = evaluate(test_ds, base.scores(test_ds.X), base.threshold, mask=eval_mask)
 
     kind = "lstm_ae" if args.model == "lstm" else "dense_ae"
-    digest = hashlib.sha1(json.dumps(vars(args) | {"out": ""}).encode()).hexdigest()[:6]
+    digest = hashlib.sha1(json.dumps(vars(args) | {"out": ""}, default=str).encode()).hexdigest()[
+        :6
+    ]
     version = f"{kind.replace('_', '-')}-{datetime.now(UTC):%Y%m%d-%H%M%S}-{digest}"
     out = args.out / version
     out.mkdir(parents=True)
@@ -200,7 +213,11 @@ def main() -> None:
     drift = info_extra.pop("check_onnx")(onnx)
     assert drift < 1e-3, f"ONNX/torch mismatch {drift}"
 
-    live = score_report(onnx, holdout, set(args.exclude_ip)) if holdout is not None else None
+    live = (
+        score_report(onnx, holdout, set(args.exclude_ip), args.exclude_span)
+        if holdout is not None
+        else None
+    )
     info = {
         "kind": kind,
         "live_holdout": live,
@@ -210,9 +227,11 @@ def main() -> None:
     }
     report = {"version": version, "model": model_report, "isolation_forest": base_report, **info}
     (out / "report.json").write_text(json.dumps(report, indent=2, default=str))
-    (out / "report.md").write_text(render_markdown(version, model_report, base_report, info))
+    (out / "report.md").write_text(
+        render_markdown(version, model_report, base_report, info), encoding="utf-8"
+    )
     log(f"exported {out} in {time.monotonic() - t0:.1f}s")
-    print((out / "report.md").read_text())
+    print((out / "report.md").read_text(encoding="utf-8"))
 
 
 REAL_QUANTILE = 0.99

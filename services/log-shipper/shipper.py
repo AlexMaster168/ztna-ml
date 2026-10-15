@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+import zlib
 from pathlib import Path
 
 import redis
@@ -18,7 +19,8 @@ log = logging.getLogger("log-shipper")
 
 LOG_PATH = Path(os.environ.get("LOG_PATH", "/var/log/nginx/access.json"))
 STATE_PATH = Path(os.environ.get("STATE_PATH", "/state/offset.json"))
-STREAM = os.environ.get("STREAM", "traffic:http")
+STREAM_PREFIX = os.environ.get("STREAM_PREFIX", "traffic:http")
+SHARDS = int(os.environ.get("TRAFFIC_SHARDS", "8"))
 GATEWAY = os.environ.get("GATEWAY_NAME", "gw-1")
 MAXLEN = int(os.environ.get("STREAM_MAXLEN", "1000000"))
 BATCH = int(os.environ.get("BATCH_SIZE", "500"))
@@ -49,10 +51,24 @@ def save_state(inode: int, offset: int) -> None:
     tmp.replace(STATE_PATH)
 
 
+def shard_of(gw: str, peer_ip: str, shards: int = SHARDS) -> int:
+    """Must match ztna_ml.shards.shard_of: one peer, one shard, one worker."""
+    return zlib.crc32(f"{gw}|{peer_ip}".encode()) % shards
+
+
+def stream_for(line: bytes) -> str:
+    try:
+        peer = json.loads(line).get("peer_ip", "")
+    except (ValueError, AttributeError):
+        peer = ""
+    return f"{STREAM_PREFIX}:{shard_of(GATEWAY, peer)}"
+
+
 def ship(r: redis.Redis, lines: list[bytes]) -> None:
     pipe = r.pipeline(transaction=False)
+    maxlen = max(MAXLEN // SHARDS, 1000)
     for line in lines:
-        pipe.xadd(STREAM, {"gw": GATEWAY, "data": line}, maxlen=MAXLEN, approximate=True)
+        pipe.xadd(stream_for(line), {"gw": GATEWAY, "data": line}, maxlen=maxlen, approximate=True)
     pipe.execute()
 
 

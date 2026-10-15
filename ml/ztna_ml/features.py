@@ -64,6 +64,9 @@ class Window:
     n_scanner_ua: int = 0
     n_novel_ua: int = 0
     n_empty_ua: int = 0
+    # Requests refused by the access policy. They are a gateway decision, not behaviour of
+    # the service, so they are kept out of every model feature and only counted.
+    n_denied: int = 0
     bytes_sum: int = 0
     bytes_max: int = 0
     req_len_log_sum: float = 0.0
@@ -78,6 +81,9 @@ class Window:
         return self.start + WINDOW_SECONDS
 
     def add(self, r: Request, novel_ua: bool) -> None:
+        if r.denied:
+            self.n_denied += 1
+            return
         self.count += 1
         self.paths.add(r.path)
         if 400 <= r.status < 500:
@@ -143,8 +149,23 @@ class Window:
             "status_404": self.n_404,
             "auth_failures": self.n_auth_fail,
             "bytes_out": self.bytes_sum,
+            "denied": self.n_denied,
             "user_agents": sorted(self.uas)[:5],
         }
+
+    # Checkpointing (see ztna_ml.worker): plain JSON-able dicts.
+    def to_dict(self) -> dict:
+        d = {k: getattr(self, k) for k in self.__dataclass_fields__}
+        d["paths"], d["uas"], d["fired"] = sorted(self.paths), sorted(self.uas), sorted(self.fired)
+        d["drift_values"] = list(self.drift_values)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Window:
+        w = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        w.paths, w.uas, w.fired = set(w.paths), set(w.uas), set(w.fired)
+        w.drift_values = tuple(w.drift_values)
+        return w
 
 
 class KnownUAs:
@@ -158,6 +179,13 @@ class KnownUAs:
     def seen(self, peer: str, ua: str) -> bool:
         uas = self._data.get(peer)
         return bool(uas) and ua in uas
+
+    def export_peer(self, peer: str) -> list[str]:
+        return list(self._data.get(peer, ()))
+
+    def import_peer(self, peer: str, uas: list[str]) -> None:
+        if uas:
+            self._data[peer] = OrderedDict.fromkeys(uas)
 
     def remember(self, peer: str, uas: set[str]) -> None:
         known = self._data.setdefault(peer, OrderedDict())
@@ -178,6 +206,14 @@ class PeerBaselines:
         self.max_peers = max_peers
         # peer -> (fast_bytes, slow_bytes, fast_count, slow_count)
         self._data: OrderedDict[str, tuple[float, float, float, float]] = OrderedDict()
+
+    def export_peer(self, peer: str) -> list[float] | None:
+        v = self._data.get(peer)
+        return list(v) if v else None
+
+    def import_peer(self, peer: str, values: list[float] | None) -> None:
+        if values:
+            self._data[peer] = tuple(values)  # type: ignore[assignment]
 
     def observe(self, peer: str, bytes_out: float, count: float) -> tuple[float, float]:
         """Fold in a closed window and return its drift (log fast/slow ratio)."""
@@ -201,9 +237,14 @@ class PeerBaselines:
 
 
 class WindowManager:
-    """Assigns requests to per-peer tumbling windows in event time and emits closed ones."""
+    """Assigns requests to per-peer tumbling windows in event time and emits closed ones.
 
-    def __init__(self) -> None:
+    `offset` shifts the window grid: managers with offsets 0, 10 and 20 s together give
+    30 s windows that hop every 10 s, each of them an ordinary tumbling series.
+    """
+
+    def __init__(self, offset: float = 0.0) -> None:
+        self.offset = offset
         self.open: dict[str, Window] = {}
         self.known_uas = KnownUAs()
         self.baselines = PeerBaselines()
@@ -212,7 +253,7 @@ class WindowManager:
     def add(self, r: Request) -> tuple[Window, list[Window]]:
         """Add a request. Returns its window and any windows closed as a result."""
         closed: list[Window] = []
-        start = math.floor(r.ts / WINDOW_SECONDS) * WINDOW_SECONDS
+        start = math.floor((r.ts - self.offset) / WINDOW_SECONDS) * WINDOW_SECONDS + self.offset
         w = self.open.get(r.peer_ip)
         if w is not None and w.start != start:
             if start > w.start:
@@ -234,6 +275,20 @@ class WindowManager:
 
     def flush(self) -> list[Window]:
         return [self._close(p) for p in list(self.open)]
+
+    def export_peer(self, peer: str) -> dict:
+        w = self.open.get(peer)
+        return {
+            "open": w.to_dict() if w else None,
+            "uas": self.known_uas.export_peer(peer),
+            "baseline": self.baselines.export_peer(peer),
+        }
+
+    def import_peer(self, peer: str, d: dict) -> None:
+        if d.get("open"):
+            self.open[peer] = Window.from_dict(d["open"])
+        self.known_uas.import_peer(peer, d.get("uas") or [])
+        self.baselines.import_peer(peer, d.get("baseline"))
 
     def _close(self, peer: str) -> Window:
         w = self.open.pop(peer)

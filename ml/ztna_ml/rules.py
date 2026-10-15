@@ -31,6 +31,7 @@ class RuleConfig:
     exfil_bytes: int = int(_env("RULE_EXFIL_BYTES", 64 * 1024 * 1024))
     rate_spike_requests: int = int(_env("RULE_RATE_SPIKE_REQUESTS", 300))
     missing_ua_requests: int = int(_env("RULE_MISSING_UA_REQUESTS", 5))
+    denied_requests: int = int(_env("RULE_DENIED_REQUESTS", 20))
 
 
 Rule = Callable[[Window, RuleConfig], Detection | None]
@@ -75,6 +76,13 @@ def missing_ua(w: Window, c: RuleConfig) -> Detection | None:
     return None
 
 
+def denied_burst(w: Window, c: RuleConfig) -> Detection | None:
+    """Hammering resources the access policy has closed for this peer."""
+    if w.n_denied >= c.denied_requests:
+        return Detection("rule", "access_denied_burst", 20, {"denied": w.n_denied})
+    return None
+
+
 RULES: dict[str, Rule] = {
     "brute_force": brute_force,
     "scanner_user_agent": scanner_ua,
@@ -82,6 +90,7 @@ RULES: dict[str, Rule] = {
     "data_exfiltration": exfiltration,
     "request_flood": rate_spike,
     "missing_user_agent": missing_ua,
+    "access_denied_burst": denied_burst,
 }
 
 

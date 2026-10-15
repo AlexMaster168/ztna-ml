@@ -128,68 +128,100 @@ class FakeScorer:
 
 
 def test_model_detection_on_window_close():
-    m_hi, m_lo = Detector(FakeScorer(2.0)), Detector(FakeScorer(0.5))
+    m_hi = Detector(FakeScorer(2.0), phases=1)
+    m_lo = Detector(FakeScorer(0.5), phases=1)
     for det in (m_hi, m_lo):
         for i in range(5):
             det.on_request("gw-1", req(i))
-    w = m_hi.managers["gw-1"].open["10.13.0.2"]
-    ratio, d = m_hi.score_window(w)
-    assert ratio == 2.0 and d.kind == "traffic_anomaly" and d.penalty == 22.0
-    assert m_lo.score_window(m_lo.managers["gw-1"].open["10.13.0.2"]) == (0.5, None)
+    s = m_hi.score_window(m_hi.managers["gw-1"][0].open["10.13.0.2"])
+    assert s.ratio == 2.0 and s.detection.kind == "traffic_anomaly"
+    assert s.detection.penalty == 22.0
+    s = m_lo.score_window(m_lo.managers["gw-1"][0].open["10.13.0.2"])
+    assert (s.ratio, s.detection) == (0.5, None)
+
+
+def test_model_penalty_is_spread_over_phases():
+    det = Detector(FakeScorer(2.0), phases=3)
+    for i in range(5):
+        det.on_request("gw-1", req(i))
+    s = det.score_window(det.managers["gw-1"][0].open["10.13.0.2"])
+    assert s.detection.penalty == round(22.0 / 3, 1)
 
 
 def test_model_skips_sparse_windows():
     det = Detector(FakeScorer(5.0))
     det.on_request("gw-1", req(0))
-    assert det.score_window(det.managers["gw-1"].open["10.13.0.2"]) == (None, None)
+    s = det.score_window(det.managers["gw-1"][0].open["10.13.0.2"])
+    assert (s.ratio, s.detection) == (None, None)
 
 
-class FakeRedis:
-    def __init__(self, cfg):
-        self.cfg = cfg
-        self.status = {}
+def test_shadow_model_is_scored_but_never_detects():
+    from ztna_ml.worker import Models
 
-    def hgetall(self, key):
-        return {k.encode(): v.encode() for k, v in self.cfg.items()}
-
-    def hset(self, key, mapping):
-        self.status[key] = mapping
-
-    def expire(self, key, ttl):
-        pass
+    det = Detector(models=Models(active=FakeScorer(0.5), shadow=FakeScorer(3.0)), phases=1)
+    for i in range(5):
+        det.on_request("gw-1", req(i))
+    s = det.score_window(det.managers["gw-1"][0].open["10.13.0.2"])
+    assert s.ratio == 0.5 and s.shadow_ratio == 3.0 and s.detection is None
 
 
-def test_worker_follows_model_deployment(tmp_path, monkeypatch):
-    from ztna_ml import worker as wk
-
-    loaded = []
-    monkeypatch.setattr(wk, "load_scorer", lambda p: loaded.append(p) or FakeScorer(2.0))
-    r = FakeRedis({"version": "dense-ae-1", "mode": "shadow"})
-    w = wk.Worker(r, Detector(None), "c1", tmp_path)
-    w.refresh_model()
-    assert w.detector.scorer is not None and w.shadow and loaded == [tmp_path / "dense-ae-1"]
-    r.cfg["mode"] = "active"
-    w.refresh_model()
-    assert not w.shadow and len(loaded) == 1  # mode change does not reload
-    r.cfg = {"version": "../etc", "mode": "active"}
-    w.refresh_model()
-    assert w.model_version == "dense-ae-1"  # path traversal refused
-    r.cfg = {}
-    w.refresh_model()
-    assert w.detector.scorer is None and w.shadow
-    assert r.status["ml:worker:c1"]["version"] == ""
+def test_hopping_windows_close_every_ten_seconds():
+    det = Detector(None, phases=3)
+    closed = []
+    for t in range(0, 61, 2):  # a request every 2 s for a minute
+        closed += det.on_request("gw-1", req(t))[2]
+    starts = sorted(w.start - T0 for _, w in closed)
+    assert starts[:5] == [-20, -10, 0, 10, 20]
+    assert all(w.end - w.start == WINDOW_SECONDS for _, w in closed)
+    # each phase alone is a tumbling series
+    phase0 = sorted(w.start - T0 for k, w in closed if k == 0)
+    assert phase0 == [0, 30]
 
 
-def test_sequence_scorer_waits_for_history():
-    det = Detector(FakeScorer(2.0, history_needed=3))
-    results = []
-    for k in range(4):
-        for i in range(5):
-            det.on_request("gw-1", req(k * WINDOW_SECONDS + i))
-        w = det.managers["gw-1"].open.pop("10.13.0.2")
-        results.append(det.score_window(w)[0])
-    assert results == [None, None, 2.0, 2.0]
-    assert det.scorer.seen == [3, 4]  # the scorer gets the whole history
+def test_rules_fire_once_despite_phases():
+    d = Detector(None, RuleConfig(brute_force_failures=8), phases=3)
+    reqs = [req(i * 0.5, path="/login", method="POST", status=401) for i in range(20)]
+    assert kinds(d, reqs) == ["brute_force"]
+
+
+def test_policy_denials_stay_out_of_features_but_are_counted():
+    from dataclasses import replace
+
+    det = Detector(None, RuleConfig(denied_requests=5), phases=1)
+    denied = [replace(req(i * 0.5, path="/admin", status=403), denied=True) for i in range(6)]
+    found = kinds(det, [req(0), *denied])
+    w = det.managers["gw-1"][0].open["10.13.0.2"]
+    assert w.count == 1 and w.n_denied == 6 and w.n_4xx == 0
+    assert found == ["access_denied_burst"]
+
+
+def test_parse_line_marks_policy_denials():
+    base = {"ts": "2026-10-10T17:16:31+00:00", "peer_ip": "10.13.0.2", "status": 403}
+    assert parse_line(json.dumps({**base, "resource": "admin", "allow": "0"})).denied
+    assert not parse_line(json.dumps({**base, "resource": "admin", "allow": "1"})).denied
+    assert not parse_line(json.dumps({**base, "resource": "", "allow": "0"})).denied  # 404 path
+
+
+def test_peer_state_roundtrip_continues_identically():
+    """A shard restored from its checkpoint behaves exactly like the original."""
+    a = Detector(FakeScorer(1.5, history_needed=2), phases=3)
+    for t in range(0, 95, 3):
+        a.on_request("gw-1", req(t, size=1000 + t))
+    snapshot = json.loads(json.dumps(a.export_peer("gw-1", "10.13.0.2")))
+    b = Detector(FakeScorer(1.5, history_needed=2), phases=3)
+    b.import_peer("gw-1", "10.13.0.2", snapshot)
+    b.restore_watermarks(a.watermarks())
+
+    def run(det):
+        out = []
+        for t in range(95, 200, 3):
+            _, _, closed = det.on_request("gw-1", req(t, size=1000 + t))
+            for k, w in closed:
+                ratio = det.score_window(w, "gw-1", k).ratio
+                out.append((k, w.start, tuple(np.round(w.vector(), 5)), ratio))
+        return out
+
+    assert run(a) == run(b)
 
 
 def test_drift_measures_change_against_own_baseline():

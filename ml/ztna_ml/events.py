@@ -18,6 +18,8 @@ class Request:
     request_length: int
     rt: float
     ua: str
+    # Refused by the gateway's access policy (403 from nginx, never reached the service).
+    denied: bool = False
 
 
 def parse_line(raw: bytes | str) -> Request | None:
@@ -35,6 +37,7 @@ def parse_line(raw: bytes | str) -> Request | None:
             request_length=int(d.get("request_length", 0)),
             rt=float(d.get("rt", 0) or 0),
             ua=d.get("ua", "") or "",
+            denied=d.get("allow") == "0" and bool(d.get("resource")),
         )
     except (ValueError, KeyError, TypeError):
         return None

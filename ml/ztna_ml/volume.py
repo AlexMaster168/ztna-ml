@@ -45,6 +45,22 @@ class VolumeTracker:
         self.max_peers = max_peers
         self._peers: OrderedDict[str, _PeerVolume] = OrderedDict()
 
+    def export_peer(self, peer: str) -> dict | None:
+        st = self._peers.get(peer)
+        if st is None:
+            return None
+        return {
+            "recent": list(st.recent),
+            "baseline": st.baseline,
+            "windows": st.windows,
+            "cooldown": st.cooldown,
+        }
+
+    def import_peer(self, peer: str, d: dict | None) -> None:
+        if d:
+            recent = deque(d["recent"], maxlen=HORIZON_WINDOWS)
+            self._peers[peer] = _PeerVolume(recent, d["baseline"], d["windows"], d["cooldown"])
+
     def observe(self, peer: str, bytes_out: int) -> Detection | None:
         """Feed one closed window of a peer; returns a detection when the limit is crossed."""
         c = self.config

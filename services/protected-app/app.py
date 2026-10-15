@@ -29,6 +29,22 @@ def page(name: str) -> str:
     return f"<h1>{name}</h1><p>{'lorem ipsum ' * 50}</p>"
 
 
+ADMIN_SECTIONS = {"users", "audit", "billing"}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin() -> str:
+    links = "".join(f'<li><a href="/admin/{s}">{s}</a></li>' for s in sorted(ADMIN_SECTIONS))
+    return f"<h1>Admin console</h1><ul>{links}</ul>"
+
+
+@app.get("/admin/{section}", response_class=HTMLResponse)
+def admin_section(section: str) -> str:
+    if section not in ADMIN_SECTIONS:
+        raise HTTPException(404)
+    return f"<h1>admin: {section}</h1>"
+
+
 @app.post("/login")
 def login(username: str = Form(...), password: str = Form(...)) -> dict[str, str]:
     if username != DEMO_USER or password != DEMO_PASSWORD:
