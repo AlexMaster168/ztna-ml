@@ -15,7 +15,22 @@ import urllib.request
 
 from profiles import PROFILES, Action
 
-BASE_URL = "http://10.13.0.1"
+
+
+def gateway_url(conf: str = "/etc/wireguard/wg0.conf") -> str:
+    """The gateway's tunnel address is the only AllowedIPs entry of the client config."""
+    try:
+        with open(conf) as fh:
+            for line in fh:
+                key, _, value = line.partition("=")
+                if key.strip() == "AllowedIPs":
+                    return "http://" + value.strip().split("/")[0]
+    except OSError:
+        pass
+    return "http://10.13.0.1"
+
+
+BASE_URL = gateway_url()
 
 
 def perform(a: Action) -> int:

@@ -5,7 +5,7 @@ RUN apt-get update \
 COPY traffic/ /opt/traffic/
 RUN printf '#!/bin/sh\nexec python3 /opt/traffic/run.py "$@"\n' > /usr/local/bin/traffic \
  && chmod +x /usr/local/bin/traffic
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY entrypoint.sh gw-ip /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/gw-ip
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["sleep", "infinity"]

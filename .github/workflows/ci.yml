@@ -11,6 +11,14 @@ jobs:
     defaults:
       run:
         working-directory: orchestrator
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,7 +29,16 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
-      - run: pytest -q
+      - name: Tests (SQLite)
+        run: pytest -q
+      - name: Tests (PostgreSQL, incl. partitioning)
+        run: pytest -q
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Migrations are complete
+        run: python manage.py makemigrations --check --dry-run
+        env:
+          DJANGO_SETTINGS_MODULE: ztna.settings_test
 
   gateway-agent:
     runs-on: ubuntu-latest

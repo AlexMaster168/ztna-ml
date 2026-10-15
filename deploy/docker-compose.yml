@@ -19,11 +19,14 @@ volumes:
   pgdata:
   redisdata:
   wgstate:
+  wgstate2:
   pki:
   peerconf:
   pgbackups:
   nginxlogs:
+  nginxlogs2:
   shipperstate:
+  shipperstate2:
   models:
 
 services:
@@ -79,6 +82,31 @@ services:
       - ./pki/gen-dev-pki.sh:/gen-dev-pki.sh:ro
       - pki:/pki
 
+  # Identity provider for single sign-on (dev mode: realm imported on start).
+  keycloak:
+    <<: *restart
+    image: quay.io/keycloak/keycloak:26.0.7
+    command: ["start-dev", "--import-realm", "--http-port=8180"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in deploy/.env}
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in deploy/.env}
+      SSO_DEMO_PASSWORD: ${SSO_DEMO_PASSWORD:?set SSO_DEMO_PASSWORD in deploy/.env}
+    volumes:
+      - ./keycloak/ztna-realm.json:/opt/keycloak/data/import/ztna-realm.json:ro
+    ports:
+      - "127.0.0.1:8180:8180"
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q UP <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   orchestrator:
     <<: *restart
     build: ../orchestrator
@@ -88,9 +116,14 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-ztna}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ztna}
       REDIS_URL: redis://redis:6379/0
       MODELS_DIR: /models
-      GATEWAY_NAME: gw-1
-      GATEWAY_ENDPOINT: 172.31.0.10:51820
-      WG_SUBNET: 10.13.0.0/24
+      # name|endpoint peers dial|tunnel subnet; tokens in GATEWAY_TOKEN_<NAME>.
+      GATEWAYS: gw-1|172.31.0.10:51820|10.13.0.0/24,gw-2|172.31.0.11:51820|10.14.0.0/24
+      GATEWAY_TOKEN_GW_1: ${GATEWAY_TOKEN}
+      GATEWAY_TOKEN_GW_2: ${GATEWAY_TOKEN_GW_2:?set GATEWAY_TOKEN_GW_2 in deploy/.env}
+      # SSO: the issuer is what the browser sees, keys are fetched inside the network.
+      OIDC_ISSUER: http://localhost:8180/realms/ztna
+      OIDC_JWKS_URL: http://keycloak:8180/realms/ztna/protocol/openid-connect/certs
+      OIDC_CLIENT_ID: ztna-dashboard
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -138,8 +171,14 @@ services:
       <<: *orch-env
       SKIP_MIGRATE: "1"
     user: "0"
-    command: ["python", "manage.py", "seed_dev_peers", "--gateway", "gw-1", "--out", "/peers",
-              "peer-normal", "peer-normal-2", "peer-dev", "peer-attacker"]
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py seed_dev_peers --gateway gw-1 --out /peers
+        peer-normal peer-normal-2 peer-dev peer-attacker
+        peer-branch@gw-2 peer-branch-attacker@gw-2
+        && python manage.py seed_dev_policy
     volumes:
       - peerconf:/peers
     depends_on:
@@ -154,6 +193,8 @@ services:
       <<: *orch-env
       SKIP_MIGRATE: "1"
     command: ["python", "manage.py", "trust_engine"]
+    volumes:
+      - models:/models:ro  # registers models the trainer produces
     healthcheck:
       test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>60)"]
       interval: 15s
@@ -164,12 +205,41 @@ services:
       orchestrator: { condition: service_healthy }
     networks: [backend]
 
+  notifier:
+    <<: *restart
+    image: ztna-orchestrator
+    env_file: .env
+    environment:
+      <<: *orch-env
+      SKIP_MIGRATE: "1"
+      TELEGRAM_API_URL: ${TELEGRAM_API_URL:-https://api.telegram.org}
+    command: ["python", "manage.py", "notifier"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>60)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      orchestrator: { condition: service_healthy }
+    networks: [backend]
+
+  # Dev only: receives notifications the way Slack/Telegram/a SIEM would.
+  webhook-sink:
+    <<: *restart
+    build: ../services/webhook-sink
+    networks: [backend]
+    ports:
+      - "127.0.0.1:8090:8080"
+
   log-shipper:
     <<: *restart
     build: ../services/log-shipper
+    image: ztna-log-shipper
     environment:
       REDIS_URL: redis://redis:6379/0
       GATEWAY_NAME: gw-1
+      TRAFFIC_SHARDS: "8"
     volumes:
       - nginxlogs:/var/log/nginx:ro
       - shipperstate:/state
@@ -184,13 +254,40 @@ services:
       gateway: { condition: service_healthy }
     networks: [backend]
 
+  log-shipper-2:
+    <<: *restart
+    build: ../services/log-shipper
+    image: ztna-log-shipper
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      GATEWAY_NAME: gw-2
+      TRAFFIC_SHARDS: "8"
+    volumes:
+      - nginxlogs2:/var/log/nginx:ro
+      - shipperstate2:/state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>60)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    depends_on:
+      redis: { condition: service_healthy }
+      gateway-2: { condition: service_healthy }
+    networks: [backend]
+
+  # Replicas share the traffic shards through leases in Redis and rebalance on their own;
+  # scale with `docker compose up -d --scale ml-worker=N`.
   ml-worker:
     <<: *restart
     build: ../ml
+    image: ztna-ml-worker
+    deploy:
+      replicas: 2
     environment:
       REDIS_URL: redis://redis:6379/0
-      # The active model and its mode (shadow/active) are selected in the dashboard;
-      # the worker follows the ml:model key in Redis.
+      TRAFFIC_SHARDS: "8"
+      # Active and shadow models are selected in the dashboard; workers follow ml:model.
       MODELS_DIR: /models
     volumes:
       - models:/models:ro
@@ -204,12 +301,36 @@ services:
       redis: { condition: service_healthy }
     networks: [backend]
 
+  # Continuous training: schedule, drift or a request from the dashboard.
+  trainer:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: ml/Dockerfile.train
+    image: ztna-ml-train
+    command: ["ztna_ml.trainer"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      MODELS_DIR: /models
+    volumes:
+      - models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time()-os.path.getmtime('/tmp/heartbeat')>120)"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [backend]
+
   # On demand: docker compose --profile train run --rm ml-train
   ml-train:
     profiles: [train]
     build:
       context: ..
       dockerfile: ml/Dockerfile.train
+    image: ztna-ml-train
     environment:
       REDIS_URL: redis://redis:6379/0
     volumes:
@@ -224,6 +345,7 @@ services:
   gateway:
     <<: *restart
     build: ../gateway
+    image: ztna-gateway
     cap_add: [NET_ADMIN, SYS_MODULE]
     sysctls:
       net.ipv4.ip_forward: "1"
@@ -249,6 +371,42 @@ services:
         ipv4_address: 172.30.0.10
       edge:
         ipv4_address: 172.31.0.10
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Second site (branch office): own tunnel subnet, own agent identity and log pipeline.
+  gateway-2:
+    <<: *restart
+    build: ../gateway
+    image: ztna-gateway
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    environment:
+      WG_ADDRESS: 10.14.0.1/24
+      WG_LISTEN_PORT: "51820"
+      ORCHESTRATOR_AGENT_URL: https://orchestrator-agent-api:8443
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN_GW_2}
+      TLS_CA: /pki/ca.crt
+      TLS_CERT: /pki/gw-2.crt
+      TLS_KEY: /pki/gw-2.key
+      RECONCILE_INTERVAL: "2"
+    volumes:
+      - wgstate2:/var/lib/ztna/wg
+      - pki:/pki:ro
+      - nginxlogs2:/var/log/nginx
+    depends_on:
+      protected-app: { condition: service_started }
+      pki-init: { condition: service_completed_successfully }
+    networks:
+      backend:
+        ipv4_address: 172.30.0.11
+      edge:
+        ipv4_address: 172.31.0.11
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/healthz"]
       interval: 5s
@@ -310,12 +468,44 @@ services:
       gateway: { condition: service_healthy }
     networks: [edge]
 
+  peer-branch:
+    <<: *restart
+    build: ../simulator/peer
+    image: ztna-peer
+    cap_add: [NET_ADMIN]
+    environment:
+      PEER_NAME: peer-branch
+    command: ["traffic", "browser"]
+    volumes:
+      - peerconf:/etc/ztna/peers:ro
+    depends_on:
+      gateway-2: { condition: service_healthy }
+    networks: [edge]
+
+  peer-branch-attacker:
+    <<: *restart
+    build: ../simulator/peer
+    image: ztna-peer
+    cap_add: [NET_ADMIN]
+    environment:
+      PEER_NAME: peer-branch-attacker
+    volumes:
+      - peerconf:/etc/ztna/peers:ro
+    depends_on:
+      gateway-2: { condition: service_healthy }
+    networks: [edge]
+
   dashboard:
     <<: *restart
     build: ../dashboard
     environment:
       ORCHESTRATOR_URL: http://orchestrator:8000
       REDIS_URL: redis://redis:6379/0
+      PUBLIC_URL: http://localhost:3000
+      OIDC_PUBLIC_URL: http://localhost:8180/realms/ztna
+      OIDC_INTERNAL_URL: http://keycloak:8180/realms/ztna
+      OIDC_CLIENT_ID: ztna-dashboard
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
     depends_on: [orchestrator]
     networks: [backend]
     ports:

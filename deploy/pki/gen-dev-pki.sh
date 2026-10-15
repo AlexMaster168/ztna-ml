@@ -4,7 +4,7 @@
 set -eu
 OUT=${PKI_DIR:-/pki}
 SERVER_CN=${SERVER_CN:-orchestrator-agent-api}
-CLIENT_CN=${CLIENT_CN:-gw-1}
+CLIENT_CNS=${CLIENT_CNS:-gw-1 gw-2}
 APP_UID=${APP_UID:-10001}
 cd "$OUT"
 
@@ -24,7 +24,9 @@ issue() { # name cn ext
 }
 
 issue server "$SERVER_CN" "subjectAltName=DNS:$SERVER_CN\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature"
-issue "$CLIENT_CN" "$CLIENT_CN" "extendedKeyUsage=clientAuth\nkeyUsage=digitalSignature"
+for cn in $CLIENT_CNS; do
+  issue "$cn" "$cn" "extendedKeyUsage=clientAuth\nkeyUsage=digitalSignature"
+done
 
 chmod 600 ca.key ./*.key
 chmod 644 ./*.crt

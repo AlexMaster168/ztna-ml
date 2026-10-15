@@ -1,0 +1,84 @@
+{
+  "realm": "ztna",
+  "enabled": true,
+  "displayName": "ZTNA",
+  "sslRequired": "none",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["uk", "en"],
+  "defaultLocale": "uk",
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      { "name": "ztna-admin", "description": "ZTNA administrator" },
+      { "name": "ztna-analyst", "description": "ZTNA security analyst" },
+      { "name": "ztna-viewer", "description": "ZTNA read-only" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ztna-dashboard",
+      "name": "ZTNA Control Panel",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "${OIDC_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3000/api/auth/sso/callback"],
+      "webOrigins": ["http://localhost:3000"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000/login"
+      },
+      "protocolMappers": [
+        {
+          "name": "ztna roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "olena",
+      "enabled": true,
+      "email": "olena@ztna.local",
+      "emailVerified": true,
+      "firstName": "Олена",
+      "lastName": "Коваль",
+      "credentials": [{ "type": "password", "value": "${SSO_DEMO_PASSWORD}", "temporary": false }],
+      "realmRoles": ["ztna-admin"]
+    },
+    {
+      "username": "taras",
+      "enabled": true,
+      "email": "taras@ztna.local",
+      "emailVerified": true,
+      "firstName": "Тарас",
+      "lastName": "Шевчук",
+      "credentials": [{ "type": "password", "value": "${SSO_DEMO_PASSWORD}", "temporary": false }],
+      "realmRoles": ["ztna-analyst"]
+    },
+    {
+      "username": "iryna",
+      "enabled": true,
+      "email": "iryna@ztna.local",
+      "emailVerified": true,
+      "firstName": "Ірина",
+      "lastName": "Бондар",
+      "credentials": [{ "type": "password", "value": "${SSO_DEMO_PASSWORD}", "temporary": false }],
+      "realmRoles": ["ztna-viewer"]
+    }
+  ]
+}
