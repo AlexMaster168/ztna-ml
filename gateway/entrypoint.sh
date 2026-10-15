@@ -25,6 +25,14 @@ log "wg0 up at $WG_ADDRESS, pubkey $(cat "$STATE/server.pub")"
 nft -f /etc/ztna/nftables.nft
 log "firewall loaded"
 
+# nginx listens on the tunnel address only. The access policy survives restarts in the
+# state volume (fail-static); on first boot it denies everything until gw-agent syncs.
+sed -i "s/__WG_IP__/${WG_ADDRESS%/*}/" /etc/nginx/nginx.conf
+POLICY=/var/lib/ztna/wg/policy.conf
+if [[ ! -f $POLICY ]]; then
+  python3 -c 'import sys; sys.path.insert(0, "/opt/gw-agent"); import gw_agent; print(gw_agent.render_policy(None))' > "$POLICY"
+fi
+
 # Peers and quarantine are driven by gw-agent from the orchestrator's desired state.
 # Run both processes and stop the container if either dies, so the restart policy kicks in.
 rotate_logs() {  # keep the shared access log bounded; log-shipper follows the rename

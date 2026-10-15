@@ -63,8 +63,19 @@ class FakeGateway:
         self.q: set[str] = set()
         self.fail = fail
 
+        self.policy = ""
+        self.policy_ok = True
+
     def read(self):
         return self.wg, set(self.q)
+
+    def current_policy(self):
+        return self.policy
+
+    def apply_policy(self, text):
+        if self.policy_ok:
+            self.policy = text
+        return self.policy_ok
 
     def apply(self, cmds):
         if self.fail:
@@ -104,3 +115,43 @@ def test_run_once_keeps_old_revision_on_failure():
     gw, orch = FakeGateway(fail=True), FakeOrch(STATE)
     assert ga.run_once(gw, orch, applied=2) == 2
     assert orch.reports[-1]["applied_revision"] == 2
+
+
+POLICY = {
+    "resources": [
+        {"name": "files", "path_prefix": "/files/", "upstream": "http://app:8000"},
+        {"name": "admin", "path_prefix": "/admin", "upstream": "http://app:8000"},
+        {"name": "v12", "path_prefix": "/v1.2", "upstream": "http://app:8000"},
+        {"name": "portal", "path_prefix": "/", "upstream": "http://app:8000"},
+        # never rendered: unsafe values smuggled through the control plane
+        {"name": "evil", "path_prefix": '/x"; return 200', "upstream": "http://app:8000"},
+        {"name": "evil2", "path_prefix": "/y", "upstream": "http://a;b"},
+    ],
+    "access": {"10.13.0.2": ["admin", "portal", "evil"], 'bogus"ip': ["portal"]},
+}
+
+
+def test_render_policy_orders_escapes_and_filters():
+    text = ga.render_policy(POLICY)
+    lines = [ln.strip() for ln in text.splitlines()]
+    order = [ln.split()[1].rstrip(";") for ln in lines if ln.startswith('"~^')]
+    assert order == ["files", "admin", "v12", "portal"]
+    assert '"~^/admin(/|$)" admin;' in lines  # /admin, /admin/x but not /administrator
+    assert '"~^/files/" files;' in lines
+    assert r'"~^/v1\.2(/|$)" v12;' in lines
+    assert '"10.13.0.2|admin" 1;' in lines and '"10.13.0.2|portal" 1;' in lines
+    assert "evil" not in text and "bogus" not in text
+
+
+def test_render_policy_without_policy_denies_everything():
+    text = ga.render_policy(None)
+    assert "default 0;" in text and "|" not in text.split("$ztna_allow")[1].split("default 0;")[1]
+
+
+def test_run_once_applies_policy_and_holds_revision_if_rejected():
+    gw, orch = FakeGateway(), FakeOrch({**STATE, "policy": POLICY})
+    assert ga.run_once(gw, orch, applied=0) == 4
+    assert '"10.13.0.2|admin" 1;' in gw.policy
+    gw2 = FakeGateway()
+    gw2.policy_ok = False
+    assert ga.run_once(gw2, FakeOrch({**STATE, "policy": POLICY}), applied=1) == 1
