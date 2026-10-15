@@ -15,14 +15,19 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("names", nargs="+")
-        parser.add_argument("--gateway", required=True)
+        parser.add_argument("--gateway", required=True, help="default gateway; name@gw overrides")
         parser.add_argument("--out", required=True, type=Path)
         parser.add_argument("--wait", type=int, default=120, help="seconds to wait for gateway")
 
     def handle(self, names, gateway, out, wait, **options):
-        gw = self._wait_for_gateway(gateway, wait)
+        gateways: dict[str, Gateway] = {}
         out.mkdir(parents=True, exist_ok=True)
-        for name in names:
+        for spec in names:
+            name, _, gw_name = spec.partition("@")
+            gw_name = gw_name or gateway
+            if gw_name not in gateways:
+                gateways[gw_name] = self._wait_for_gateway(gw_name, wait)
+            gw = gateways[gw_name]
             path = out / f"{name}.conf"
             peer = Peer.objects.filter(gateway=gw, name=name).first()
             if peer and peer.status != PeerStatus.REVOKED and path.exists():

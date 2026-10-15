@@ -1,4 +1,6 @@
 -r requirements.txt
 pytest==8.4.2
 pytest-django==4.11.1
+fakeredis[lua]==2.31.3
+polib==1.2.0
 ruff==0.13.3

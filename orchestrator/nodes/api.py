@@ -1,3 +1,5 @@
+from django.db.models import Count, Q
+from django.utils.translation import gettext as _
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -38,6 +40,7 @@ class PeerSerializer(serializers.ModelSerializer):
 
 class GatewaySerializer(serializers.ModelSerializer):
     in_sync = serializers.SerializerMethodField()
+    peer_count = serializers.IntegerField(read_only=True, default=None)
 
     class Meta:
         model = Gateway
@@ -51,6 +54,7 @@ class GatewaySerializer(serializers.ModelSerializer):
             "applied_revision",
             "in_sync",
             "last_seen_at",
+            "peer_count",
         ]
         read_only_fields = fields
 
@@ -58,10 +62,50 @@ class GatewaySerializer(serializers.ModelSerializer):
         return gw.applied_revision == gw.revision
 
 
-class GatewayViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Gateway.objects.all()
+class GatewayCreateSerializer(serializers.Serializer):
+    name = serializers.SlugField(max_length=50)
+    endpoint = serializers.RegexField(r"^[A-Za-z0-9.-]+:[0-9]{1,5}$")
+    wg_subnet = serializers.CharField(max_length=43)
+
+
+class GatewayViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = Gateway.objects.annotate(
+        peer_count=Count("peers", filter=~Q(peers__status=PeerStatus.REVOKED))
+    ).order_by("name")
     serializer_class = GatewaySerializer
-    permission_classes = [IsViewer]
+
+    def get_permissions(self):
+        return [IsViewer() if self.request.method == "GET" else IsAdmin()]
+
+    def create(self, request):
+        data = GatewayCreateSerializer(data=request.data)
+        data.is_valid(raise_exception=True)
+        try:
+            gw, token = services.register_gateway(
+                **data.validated_data, actor=request.user, request=request
+            )
+        except (services.PeerError, ValueError) as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        return Response(
+            {"gateway": GatewaySerializer(gw).data, "token": token},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def perform_destroy(self, instance):
+        try:
+            services.delete_gateway(instance, self.request.user, self.request)
+        except services.PeerError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+
+    @action(detail=True, methods=["post"], url_path="rotate-token")
+    def rotate_token(self, request, pk=None):
+        token = services.rotate_gateway_token(self.get_object(), request.user, request)
+        return Response({"token": token})
 
 
 class PeerCreateSerializer(serializers.Serializer):
@@ -95,6 +139,8 @@ class PeerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Gen
         qs = super().get_queryset()
         if status_filter := self.request.query_params.get("status"):
             qs = qs.filter(status=status_filter)
+        if gateway := self.request.query_params.get("gateway"):
+            qs = qs.filter(gateway__name=gateway)
         return qs
 
     def create(self, request):
@@ -102,7 +148,7 @@ class PeerViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Gen
         data.is_valid(raise_exception=True)
         gateway = data.validated_data.get("gateway") or Gateway.objects.order_by("pk").first()
         if gateway is None:
-            raise ValidationError({"gateway": "no gateway registered"})
+            raise ValidationError({"gateway": _("no gateway registered")})
         try:
             peer, config = services.create_peer(
                 gateway,

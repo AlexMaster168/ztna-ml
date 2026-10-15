@@ -1,0 +1,115 @@
+# Ukrainian translations of API messages and notifications.
+# Compile with: python scripts/compilemessages.py (no GNU gettext needed).
+msgid ""
+msgstr ""
+"Project-Id-Version: ztna\n"
+"Language: uk\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+# nodes
+msgid "address pool %(subnet)s exhausted"
+msgstr "пул адрес %(subnet)s вичерпано"
+
+msgid "subnet must be between /16 and /30"
+msgstr "підмережа має бути від /16 до /30"
+
+msgid "subnet overlaps gateway %(name)s (%(subnet)s)"
+msgstr "підмережа перетинається зі шлюзом %(name)s (%(subnet)s)"
+
+msgid "gateway %(name)s already exists"
+msgstr "шлюз %(name)s уже існує"
+
+msgid "gateway still has live peers"
+msgstr "на шлюзі ще є активні вузли"
+
+msgid "gateway has not reported its public key yet"
+msgstr "шлюз ще не передав свій публічний ключ"
+
+msgid "invalid WireGuard public key"
+msgstr "некоректний публічний ключ WireGuard"
+
+msgid "peer %(name)s already exists"
+msgstr "вузол %(name)s уже існує"
+
+msgid "peer is revoked"
+msgstr "доступ вузла відкликано"
+
+msgid "cannot change status from %(old)s to %(new)s"
+msgstr "неможливо змінити статус з %(old)s на %(new)s"
+
+msgid "no gateway registered"
+msgstr "жодного шлюзу не зареєстровано"
+
+# access
+msgid "invalid path prefix"
+msgstr "некоректний префікс шляху"
+
+msgid "upstream must look like http://host:port"
+msgstr "upstream має виглядати як http://host:port"
+
+# mlops
+msgid "must be in (0, 1]"
+msgstr "має бути в межах (0, 1]"
+
+msgid "must be at least 1 hour"
+msgstr "щонайменше 1 година"
+
+msgid "model artifact is missing on disk"
+msgstr "файли моделі відсутні на диску"
+
+# notify
+msgid "telegram needs a bot token and a chat id"
+msgstr "для Telegram потрібні токен бота та ідентифікатор чату"
+
+msgid "url is required"
+msgstr "потрібна URL-адреса"
+
+msgid "Incident #{incident_id}: {kind} from {peer} (trust {score})"
+msgstr "Інцидент #{incident_id}: {kind} від {peer} (довіра {score})"
+
+msgid "Peer {peer} quarantined: {reason}"
+msgstr "Вузол {peer} поміщено в карантин: {reason}"
+
+msgid "Peer {peer} revoked: {reason}"
+msgstr "Доступ вузла {peer} відкликано: {reason}"
+
+msgid "Peer {peer} released: {reason}"
+msgstr "Вузол {peer} знято з карантину: {reason}"
+
+msgid "Model {version} trained ({trigger}): {result}"
+msgstr "Модель {version} навчено ({trigger}): {result}"
+
+msgid "Model {version} promoted to active"
+msgstr "Модель {version} стала активною"
+
+msgid "Test notification from the ZTNA control plane"
+msgstr "Тестове сповіщення від панелі керування ZTNA"
+
+# trust
+msgid "incident is already %(status)s"
+msgstr "інцидент уже має статус %(status)s"
+
+msgid "require revoke_below <= quarantine_below < release_above"
+msgstr "потрібно: поріг відкликання ≤ поріг карантину < поріг зняття"
+
+msgid "incident_below must be >= quarantine_below"
+msgstr "поріг інциденту має бути не нижчим за поріг карантину"
+
+# accounts
+msgid "single sign-on is not configured"
+msgstr "єдиний вхід (SSO) не налаштовано"
+
+msgid "invalid id token: %(error)s"
+msgstr "некоректний ID-токен: %(error)s"
+
+msgid "nonce mismatch"
+msgstr "nonce не збігається"
+
+msgid "the identity provider grants no ZTNA role to this user"
+msgstr "постачальник ідентичності не надає цьому користувачеві жодної ролі ZTNA"
+
+msgid "account disabled"
+msgstr "обліковий запис вимкнено"

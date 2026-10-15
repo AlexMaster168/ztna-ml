@@ -1,13 +1,16 @@
 """All state changes to peers go through here: they bump the gateway revision and audit."""
 
+import ipaddress
 from datetime import UTC, datetime
 
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
+from django.utils.translation import gettext as _
 
 from audit.services import record
 from core import live
+from notify.services import enqueue as notify
 
 from .keys import generate_keypair, is_valid_key
 from .models import Gateway, Peer, PeerStatus
@@ -40,7 +43,42 @@ def _allocate_ip(gateway: Gateway) -> str:
     for host in gateway.network.hosts():
         if str(host) not in used:
             return str(host)
-    raise PeerError(f"address pool {gateway.wg_subnet} exhausted")
+    raise PeerError(_("address pool %(subnet)s exhausted") % {"subnet": gateway.wg_subnet})
+
+
+def register_gateway(name: str, endpoint: str, wg_subnet: str, actor, request=None):
+    """Create a gateway record. Returns it with its agent token, shown only once."""
+    net = ipaddress.IPv4Network(wg_subnet, strict=True)
+    if not 16 <= net.prefixlen <= 30:
+        raise PeerError(_("subnet must be between /16 and /30"))
+    for other in Gateway.objects.all():
+        if net.overlaps(other.network):
+            raise PeerError(
+                _("subnet overlaps gateway %(name)s (%(subnet)s)")
+                % {"name": other.name, "subnet": other.wg_subnet}
+            )
+    if Gateway.objects.filter(name=name).exists():
+        raise PeerError(_("gateway %(name)s already exists") % {"name": name})
+    gw = Gateway(name=name, endpoint=endpoint, wg_subnet=str(net))
+    token = gw.set_token()
+    gw.save()
+    record(actor, "gateway.create", gw, {"endpoint": endpoint, "wg_subnet": str(net)}, request)
+    return gw, token
+
+
+def rotate_gateway_token(gateway: Gateway, actor, request=None) -> str:
+    token = gateway.set_token()
+    gateway.save(update_fields=["token_hash"])
+    record(actor, "gateway.rotate_token", gateway, request=request)
+    return token
+
+
+def delete_gateway(gateway: Gateway, actor, request=None) -> None:
+    if gateway.peers.exclude(status=PeerStatus.REVOKED).exists():
+        raise PeerError(_("gateway still has live peers"))
+    record(actor, "gateway.delete", gateway, {"name": gateway.name}, request)
+    gateway.peers.all().delete()
+    gateway.delete()
 
 
 def render_client_config(peer: Peer, private_key: str) -> str:
@@ -64,11 +102,11 @@ def create_peer(
     """Create a peer. Without `public_key` a keypair is generated and the client config
     (containing the private key) is returned once; it is never stored."""
     if not gateway.public_key:
-        raise PeerError("gateway has not reported its public key yet")
+        raise PeerError(_("gateway has not reported its public key yet"))
     private_key = None
     if public_key:
         if not is_valid_key(public_key):
-            raise PeerError("invalid WireGuard public key")
+            raise PeerError(_("invalid WireGuard public key"))
     else:
         private_key, public_key = generate_keypair()
 
@@ -76,7 +114,7 @@ def create_peer(
         # Row lock serialises IP allocation per gateway.
         gateway = Gateway.objects.select_for_update().get(pk=gateway.pk)
         if Peer.objects.filter(gateway=gateway, name=name).exists():
-            raise PeerError(f"peer {name!r} already exists")
+            raise PeerError(_("peer %(name)s already exists") % {"name": name})
         peer = Peer.objects.create(
             gateway=gateway,
             name=name,
@@ -94,7 +132,7 @@ def create_peer(
 def rotate_key(peer: Peer, actor, request=None) -> str:
     """Issue a new keypair for a live peer and return its fresh client config."""
     if peer.status == PeerStatus.REVOKED:
-        raise PeerError("peer is revoked")
+        raise PeerError(_("peer is revoked"))
     private_key, public_key = generate_keypair()
     with transaction.atomic():
         peer.public_key = public_key
@@ -114,7 +152,10 @@ def set_status(
 ) -> Peer:
     action = TRANSITIONS.get((PeerStatus(peer.status), new_status))
     if action is None:
-        raise PeerError(f"cannot change status from {peer.status} to {new_status}")
+        raise PeerError(
+            _("cannot change status from %(old)s to %(new)s")
+            % {"old": peer.status, "new": new_status}
+        )
     with transaction.atomic():
         old = peer.status
         peer.status = new_status
@@ -133,6 +174,12 @@ def set_status(
             peer.trust_score = 100.0
             fields += ["trust_reset_at", "trust_score"]
         peer.save(update_fields=fields)
+        if "trust_reset_at" in fields:
+            from trust.models import TrustScoreSnapshot  # trust depends on nodes
+
+            TrustScoreSnapshot.objects.create(
+                peer=peer, score=100.0, created_at=peer.trust_reset_at
+            )
         _bump(peer.gateway_id)
         record(actor, action, peer, {"from": old, "to": new_status, "reason": reason}, request)
         payload = {
@@ -143,16 +190,25 @@ def set_status(
             "actor": str(getattr(actor, "username", actor)),
         }
         transaction.on_commit(lambda: live.publish("peer.status", payload))
+        event, severity = {
+            PeerStatus.QUARANTINED: ("peer.quarantined", "high"),
+            PeerStatus.REVOKED: ("peer.revoked", "critical"),
+            PeerStatus.ACTIVE: ("peer.released", "low"),
+        }[new_status]
+        notify(event, severity, {**payload, "peer": peer.name})
     return peer
 
 
 def desired_state(gateway: Gateway) -> dict:
+    from access.policy import gateway_policy  # access depends on nodes, not vice versa
+
     gateway.refresh_from_db(fields=["revision"])
     peers = list(Peer.objects.filter(gateway=gateway).exclude(status=PeerStatus.REVOKED))
     return {
         "revision": gateway.revision,
         "peers": [{"public_key": p.public_key, "allowed_ip": p.wg_ip} for p in peers],
         "quarantine": sorted(p.wg_ip for p in peers if p.status == PeerStatus.QUARANTINED),
+        "policy": gateway_policy(peers),
     }
 
 

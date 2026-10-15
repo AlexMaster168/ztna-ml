@@ -24,15 +24,16 @@ def peer(gateway):
     return services.create_peer(gateway, "laptop", actor="t")[0]
 
 
-def ev(peer, penalty=60.0, kind="brute_force", source="rule"):
+def ev(peer, penalty=60.0, kind="brute_force", source="rule", at=None):
+    at = at or NOW
     return {
         "gw": peer.gateway.name,
         "peer_ip": peer.wg_ip,
         "source": source,
         "kind": kind,
         "penalty": str(penalty),
-        "window_start": str(int(NOW.timestamp())),
-        "ts": str(NOW.timestamp()),
+        "window_start": str(int(at.timestamp())),
+        "ts": str(at.timestamp()),
         "details": json.dumps({"auth_failures": 12}),
     }
 
@@ -159,8 +160,10 @@ def test_manual_release_forgives_earlier_anomalies(peer):
     engine.tick()
     peer.refresh_from_db()
     assert peer.status == PeerStatus.ACTIVE and peer.trust_score == 100
+    assert peer.scores.first().score == 100  # the chart shows the jump back
     # new misbehaviour still counts
-    engine.handle_event(ev(peer, 70), now=timezone_now())
+    now = timezone_now()
+    engine.handle_event(ev(peer, 70, at=now), now=now)
     peer.refresh_from_db()
     assert peer.status == PeerStatus.QUARANTINED
 
@@ -226,3 +229,28 @@ def timezone_now():
     from django.utils import timezone
 
     return timezone.now()
+
+
+def test_release_forgives_detections_based_on_earlier_traffic(peer):
+    engine.handle_event(ev(peer, 70), now=NOW)  # quarantined
+    released_at = NOW + timedelta(minutes=1)
+    peer.refresh_from_db()
+    services.set_status(peer, PeerStatus.ACTIVE, actor="analyst")
+    peer.trust_reset_at = released_at
+    peer.save(update_fields=["trust_reset_at"])
+    later = NOW + timedelta(minutes=2)
+    # a rule hit on traffic from before the release: recorded, not counted
+    e = engine.handle_event(ev(peer, 70), now=later)
+    assert e.penalty == 0 and e.details["forgiven"] == 1
+    # a sequence model whose look-back (NOW..later) is half before the release
+    seq = ev(peer, 30, kind="traffic_anomaly", source="model", at=later)
+    seq["details"] = json.dumps({"since": int(NOW.timestamp())})
+    e = engine.handle_event(seq, now=later)
+    peer.refresh_from_db()
+    assert e.penalty == 15 and e.details["forgiven"] == 0.5
+    assert peer.status == PeerStatus.ACTIVE
+    # judgements on post-release traffic count as usual
+    fresh = ev(peer, 70, at=later)
+    assert engine.handle_event(fresh, now=later).penalty == 70
+    peer.refresh_from_db()
+    assert peer.status == PeerStatus.QUARANTINED

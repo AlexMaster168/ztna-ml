@@ -28,3 +28,35 @@ class ModelVersion(models.Model):
 
     def __str__(self) -> str:
         return f"{self.version} ({self.stage})"
+
+
+class TrainKind(models.TextChoices):
+    LSTM = "lstm", "LSTM autoencoder"
+    DENSE = "dense", "Dense autoencoder"
+
+
+class MLOpsSettings(models.Model):
+    """Singleton (pk=1): continuous training and challenger promotion policy.
+    Mirrored to Redis (ml:trainer:config) for the trainer service."""
+
+    auto_retrain = models.BooleanField(default=True)
+    retrain_interval_hours = models.PositiveIntegerField(default=24)
+    # Mean absolute shift of the active model's normalised features over the last hour.
+    drift_threshold = models.FloatField(default=0.5)
+    model_kind = models.CharField(max_length=16, choices=TrainKind.choices, default=TrainKind.LSTM)
+    train_real_minutes = models.PositiveIntegerField(default=90)
+    # A model that passes the quality gates is deployed as the shadow challenger.
+    auto_shadow = models.BooleanField(default=True)
+    # The challenger replaces the active model once it has proven itself on live traffic.
+    auto_promote = models.BooleanField(default=False)
+    promote_min_windows = models.PositiveIntegerField(default=500)
+    promote_max_rate = models.FloatField(default=0.05)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return "mlops settings"
+
+    @classmethod
+    def get(cls) -> "MLOpsSettings":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

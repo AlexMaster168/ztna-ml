@@ -29,3 +29,18 @@ def publish(kind: str, data: dict) -> None:
         )
     except redis.RedisError as exc:  # live updates must never break a state change
         log.warning("live publish failed: %s", exc)
+
+
+SUSPICIOUS = "ml:suspicious"
+
+
+def mark_suspicious(peer_ip: str) -> None:
+    """The trainer leaves a peer's traffic around each incident out of its "normal
+    traffic" baseline (one "ip|ts" mark per incident)."""
+    if not getattr(settings, "LIVE_EVENTS", True):
+        return
+    now = time.time()
+    try:
+        _redis().zadd(SUSPICIOUS, {f"{peer_ip}|{now:.0f}": now})
+    except redis.RedisError as exc:
+        log.warning("could not mark %s suspicious: %s", peer_ip, exc)

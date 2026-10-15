@@ -33,24 +33,43 @@ class Command(BaseCommand):
         record("system", "user.bootstrap_admin", user)
         self.stdout.write(f"created admin {username}")
 
+    @staticmethod
+    def _gateway_specs() -> list[tuple[str, str, str, str]]:
+        """(name, endpoint, subnet, token) from GATEWAYS="name|endpoint|subnet,..." with the
+        token in GATEWAY_TOKEN_<NAME> (dashes as underscores), or the single-gateway vars."""
+        specs = []
+        for item in filter(None, os.environ.get("GATEWAYS", "").split(",")):
+            name, endpoint, subnet = (x.strip() for x in item.split("|"))
+            token = os.environ.get(f"GATEWAY_TOKEN_{name.upper().replace('-', '_')}")
+            if token:
+                specs.append((name, endpoint, subnet, token))
+        name, token = os.environ.get("GATEWAY_NAME"), os.environ.get("GATEWAY_TOKEN")
+        if name and token and all(s[0] != name for s in specs):
+            specs.append(
+                (
+                    name,
+                    os.environ["GATEWAY_ENDPOINT"],
+                    os.environ.get("WG_SUBNET", "10.13.0.0/24"),
+                    token,
+                )
+            )
+        return specs
+
     def _ensure_gateway(self):
-        name = os.environ.get("GATEWAY_NAME")
-        token = os.environ.get("GATEWAY_TOKEN")
-        if not (name and token):
-            return
-        gw, created = Gateway.objects.get_or_create(
-            name=name,
-            defaults={
-                "endpoint": os.environ["GATEWAY_ENDPOINT"],
-                "wg_subnet": os.environ.get("WG_SUBNET", "10.13.0.0/24"),
-                "token_hash": hash_token(token),
-            },
-        )
-        if created:
-            record("system", "gateway.bootstrap", gw)
-            self.stdout.write(f"created gateway {name}")
-        elif gw.token_hash != hash_token(token):
-            # Env is the source of truth for the dev/bootstrap token.
-            gw.token_hash = hash_token(token)
-            gw.save(update_fields=["token_hash"])
-            record("system", "gateway.rotate_token", gw)
+        for name, endpoint, subnet, token in self._gateway_specs():
+            gw, created = Gateway.objects.get_or_create(
+                name=name,
+                defaults={
+                    "endpoint": endpoint,
+                    "wg_subnet": subnet,
+                    "token_hash": hash_token(token),
+                },
+            )
+            if created:
+                record("system", "gateway.bootstrap", gw)
+                self.stdout.write(f"created gateway {name}")
+            elif gw.token_hash != hash_token(token):
+                # Env is the source of truth for the dev/bootstrap token.
+                gw.token_hash = hash_token(token)
+                gw.save(update_fields=["token_hash"])
+                record("system", "gateway.rotate_token", gw)

@@ -4,6 +4,7 @@ from datetime import timedelta
 import redis
 from django.conf import settings
 from django.utils import timezone
+from django.utils.translation import gettext as _
 from rest_framework import mixins, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -91,7 +92,9 @@ class IncidentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets
     def _move(self, request, to: IncidentStatus, allowed: set[IncidentStatus]):
         inc = self.get_object()
         if inc.status not in allowed:
-            raise ValidationError({"detail": f"incident is {inc.status}"})
+            raise ValidationError(
+                {"detail": _("incident is already %(status)s") % {"status": inc.status}}
+            )
         inc.status = to
         if to == IncidentStatus.RESOLVED:
             inc.resolved_at = timezone.now()
@@ -162,9 +165,9 @@ class EnforcementSettingsSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         merged = {**self.to_internal_value(self.to_representation(self.instance)), **attrs}
         if not merged["revoke_below"] <= merged["quarantine_below"] < merged["release_above"]:
-            raise ValidationError("require revoke_below <= quarantine_below < release_above")
+            raise ValidationError(_("require revoke_below <= quarantine_below < release_above"))
         if merged["incident_below"] < merged["quarantine_below"]:
-            raise ValidationError("incident_below must be >= quarantine_below")
+            raise ValidationError(_("incident_below must be >= quarantine_below"))
         return attrs
 
 

@@ -15,11 +15,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
+from access import policy as access_policy
 from core import live
 from nodes import services as node_services
 from nodes.models import Gateway, Peer, PeerStatus
+from notify.services import enqueue as notify
 
 from .models import (
     AnomalyEvent,
@@ -111,9 +114,18 @@ def _apply(
     peer: Peer, score: float, cfg: EnforcementSettings, now: datetime, incident: Incident | None
 ) -> str:
     """Store the score and enforce the decision. Returns the action taken."""
-    changed = abs(peer.trust_score - score) >= 0.5
+    old = peer.trust_score
+    changed = abs(old - score) >= 0.5
     peer.trust_score = round(score, 2)
     peer.save(update_fields=["trust_score"])
+    if peer.status == PeerStatus.ACTIVE and access_policy.crosses(
+        old, peer.trust_score, access_policy.thresholds()
+    ):
+        # Resource access depends on the score: the gateway must re-render its policy.
+        Gateway.objects.filter(pk=peer.gateway_id).update(revision=F("revision") + 1)
+        transaction.on_commit(
+            lambda: live.publish("peer.access", {"peer_id": peer.pk, "score": peer.trust_score})
+        )
     if changed:
         TrustScoreSnapshot.objects.create(peer=peer, score=peer.trust_score, created_at=now)
         transaction.on_commit(
@@ -138,6 +150,25 @@ def _apply(
         ]
         incident.save(update_fields=["actions", "updated_at"])
     return decision.action
+
+
+def post_release_share(
+    record: dict[str, str], details: dict, reset_at: datetime, now: datetime
+) -> float:
+    """How much of a detection rests on traffic after the last human release.
+
+    A release forgives what the peer did before it. A rule judges one moment: it counts
+    in full or not at all. A sequence model judges a look-back period (`since` .. the
+    detection), so it costs the share of that period after the release: minutes-old
+    history weighs little, while an attack that starts right after a release still
+    gains weight window by window.
+    """
+    reset = reset_at.timestamp()
+    end = float(record.get("ts") or now.timestamp())
+    since = details.get("since")
+    if since is None or end <= float(since):
+        return 1.0 if end >= reset else 0.0
+    return min(1.0, max(0.0, (end - reset) / (end - float(since))))
 
 
 @transaction.atomic
@@ -170,7 +201,14 @@ def handle_event(record: dict[str, str], now: datetime | None = None) -> Anomaly
         return event
 
     cfg = EnforcementSettings.get()
+    if peer.trust_reset_at:
+        share = post_release_share(record, event.details, peer.trust_reset_at, now)
+        if share < 1:
+            event.penalty = round(event.penalty * share, 1)
+            event.details = {**event.details, "forgiven": round(1 - share, 2)}
     event.save()
+    if event.penalty == 0:
+        return event
     score = current_score(peer, cfg, now)
 
     # Every detection is recorded, but an incident is opened only once trust has dropped
@@ -178,6 +216,18 @@ def handle_event(record: dict[str, str], now: datetime | None = None) -> Anomaly
     incident = peer.incidents.exclude(status=IncidentStatus.RESOLVED).first()
     if incident is None and score < cfg.incident_below:
         incident = Incident.objects.create(peer=peer, title=f"{event.kind} from {peer.name}")
+        transaction.on_commit(lambda ip=peer.wg_ip: live.mark_suspicious(ip))
+        notify(
+            "incident.opened",
+            severity_for(score),
+            {
+                "incident_id": incident.pk,
+                "peer": peer.name,
+                "peer_id": peer.pk,
+                "kind": event.kind,
+                "score": round(score),
+            },
+        )
         # Bring along the recent detections that contributed to the drop.
         since = now - timedelta(minutes=cfg.decay_minutes * HORIZON_TAUS)
         peer.events.filter(incident__isnull=True, created_at__gte=since).update(incident=incident)

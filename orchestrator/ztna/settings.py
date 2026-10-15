@@ -28,6 +28,8 @@ INSTALLED_APPS = [
     "nodes",
     "trust",
     "mlops",
+    "access",
+    "notify",
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -35,6 +37,8 @@ AUTH_USER_MODEL = "accounts.User"
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    # API messages follow Accept-Language (the dashboard forwards the user's choice).
+    "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -65,6 +69,13 @@ TEMPLATES = [
 DATABASES = {"default": env.db("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")}
 REDIS_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 MODELS_DIR = env("MODELS_DIR", default=str(BASE_DIR / "models"))
+# Retention of the daily-partitioned time series (see core.partitions).
+# Notifications are rendered in this language; the Telegram API base is overridable
+# for tests.
+NOTIFY_LANGUAGE = env("NOTIFY_LANGUAGE", default="uk")
+TELEGRAM_API_URL = env("TELEGRAM_API_URL", default="https://api.telegram.org")
+EVENTS_RETENTION_DAYS = env.int("EVENTS_RETENTION_DAYS", default=90)
+SCORES_RETENTION_DAYS = env.int("SCORES_RETENTION_DAYS", default=30)
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
@@ -79,7 +90,9 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-LANGUAGE_CODE = "en-us"
+LANGUAGE_CODE = "en"
+LANGUAGES = [("en", "English"), ("uk", "Українська")]
+LOCALE_PATHS = [BASE_DIR / "locale"]
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
@@ -120,6 +133,14 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {"login": env("LOGIN_THROTTLE_RATE", default="10/min")},
 }
+
+# OpenID Connect single sign-on (see accounts.oidc). The issuer is the public URL in the
+# tokens; JWKS is fetched over the internal network.
+OIDC_ISSUER = env("OIDC_ISSUER", default="")
+OIDC_JWKS_URL = env("OIDC_JWKS_URL", default="")
+OIDC_CLIENT_ID = env("OIDC_CLIENT_ID", default="")
+OIDC_ROLE_CLAIM = env("OIDC_ROLE_CLAIM", default="roles")
+OIDC_ROLE_MAP = {"ztna-admin": "admin", "ztna-analyst": "analyst", "ztna-viewer": "viewer"}
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
