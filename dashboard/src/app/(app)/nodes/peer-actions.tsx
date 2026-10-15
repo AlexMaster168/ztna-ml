@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { useT } from "@/i18n/client";
 import type { PeerStatus } from "@/lib/orchestrator";
 
 import { changeStatus, type ActionState } from "./actions";
@@ -45,16 +46,17 @@ export function PeerActions({
   canAnalyst: boolean;
   canAdmin: boolean;
 }) {
+  const t = useT();
   if (status === "revoked") return null;
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {canAnalyst && status === "active" && (
-        <OpButton id={id} op="quarantine" label="Quarantine" />
+        <OpButton id={id} op="quarantine" label={t("peer.quarantine")} />
       )}
       {canAnalyst && status === "quarantined" && (
-        <OpButton id={id} op="release" label="Release" />
+        <OpButton id={id} op="release" label={t("peer.release")} />
       )}
-      {canAdmin && <OpButton id={id} op="revoke" label="Revoke" danger />}
+      {canAdmin && <OpButton id={id} op="revoke" label={t("peer.revoke")} danger />}
     </div>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useId, useMemo, useState } from "react";
 
+import { useT } from "@/i18n/client";
+
 import { hhmm } from "./format";
 
 export type Point = { t: number; v: number };
@@ -11,6 +13,8 @@ type Props = {
   title: string;
   data: Point[];
   kind?: "line" | "bar";
+  /** hold each value until the next point (a score that changes in jumps) */
+  step?: boolean;
   yMax?: number;
   references?: Reference[];
   /** decimals shown in labels and tooltips (props must stay serialisable) */
@@ -29,11 +33,13 @@ export function TimeSeriesChart({
   title,
   data,
   kind = "line",
+  step = false,
   yMax,
   references = [],
   decimals = 0,
   height = 180,
 }: Props) {
+  const t = useT();
   const format = (v: number) => v.toFixed(decimals);
   const id = useId();
   const [hover, setHover] = useState<number | null>(null);
@@ -45,9 +51,11 @@ export function TimeSeriesChart({
     const t0 = data.length ? data[0].t : 0;
     const t1 = data.length > 1 ? data[data.length - 1].t : t0 + 1;
     const top =
-      yMax ?? Math.max(1, ...data.map((d) => d.v), ...references.map((r) => r.y)) * 1.1;
+      yMax ??
+      Math.max(1, ...data.map((d) => d.v), ...references.map((r) => r.y)) * 1.1;
     const x = (t: number) => PAD.left + ((t - t0) / (t1 - t0 || 1)) * innerW;
-    const y = (v: number) => PAD.top + innerH - (Math.min(v, top) / top) * innerH;
+    const y = (v: number) =>
+      PAD.top + innerH - (Math.min(v, top) / top) * innerH;
     const ticks = [0, top / 2, top];
     return { x, y, ticks, t0, t1 };
   }, [data, yMax, references, innerW, innerH]);
@@ -56,13 +64,24 @@ export function TimeSeriesChart({
     return (
       <figure className="card p-4">
         <figcaption className="text-sm font-medium">{title}</figcaption>
-        <p className="mt-6 mb-6 text-center text-sm text-zinc-500">No data yet</p>
+        <p className="mt-6 mb-6 text-center text-sm text-zinc-500">
+          {t("chart.noData")}
+        </p>
       </figure>
     );
   }
 
   const barW = Math.max(2, Math.min(14, innerW / data.length - 2));
-  const path = data.map((d, i) => `${i ? "L" : "M"}${x(d.t).toFixed(1)},${y(d.v).toFixed(1)}`).join("");
+  const path = data
+    .map((d, i) => {
+      const px = x(d.t).toFixed(1);
+      const py = y(d.v).toFixed(1);
+      if (i === 0) return `M${px},${py}`;
+      return step
+        ? `L${px},${y(data[i - 1].v).toFixed(1)}L${px},${py}`
+        : `L${px},${py}`;
+    })
+    .join("");
 
   const onMove = (e: React.PointerEvent<SVGRectElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -77,13 +96,23 @@ export function TimeSeriesChart({
   const h = hover === null ? null : data[hover];
   return (
     <figure className="card p-4" aria-labelledby={`${id}-title`}>
-      <figcaption id={`${id}-title`} className="flex items-baseline justify-between text-sm">
+      <figcaption
+        id={`${id}-title`}
+        className="flex items-baseline justify-between text-sm"
+      >
         <span className="font-medium">{title}</span>
         <span className="tabular-nums text-zinc-500">
-          {h ? `${time(h.t)} · ${format(h.v)}` : `latest ${format(data[data.length - 1].v)}`}
+          {h
+            ? `${time(h.t)} · ${format(h.v)}`
+            : t("chart.latest", { value: format(data[data.length - 1].v) })}
         </span>
       </figcaption>
-      <svg viewBox={`0 0 ${W} ${H}`} className="mt-2 w-full" role="img" aria-label={title}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="mt-2 w-full"
+        role="img"
+        aria-label={title}
+      >
         {ticks.map((v) => (
           <g key={v}>
             <line
@@ -126,7 +155,13 @@ export function TimeSeriesChart({
           </g>
         ))}
         {kind === "line" ? (
-          <path d={path} fill="none" strokeWidth={2} strokeLinejoin="round" className="series" />
+          <path
+            d={path}
+            fill="none"
+            strokeWidth={2}
+            strokeLinejoin="round"
+            className="series"
+          />
         ) : (
           data.map((d, i) => (
             <rect
@@ -144,7 +179,12 @@ export function TimeSeriesChart({
         <text x={PAD.left} y={H - 4} className="fill-zinc-500 text-[11px]">
           {time(t0)}
         </text>
-        <text x={W - PAD.right} y={H - 4} textAnchor="end" className="fill-zinc-500 text-[11px]">
+        <text
+          x={W - PAD.right}
+          y={H - 4}
+          textAnchor="end"
+          className="fill-zinc-500 text-[11px]"
+        >
           {time(t1)} UTC
         </text>
         {h && (
@@ -158,7 +198,13 @@ export function TimeSeriesChart({
               strokeWidth={1}
             />
             {kind === "line" && (
-              <circle cx={x(h.t)} cy={y(h.v)} r={4} strokeWidth={2} className="series-dot" />
+              <circle
+                cx={x(h.t)}
+                cy={y(h.v)}
+                r={4}
+                strokeWidth={2}
+                className="series-dot"
+              />
             )}
           </g>
         )}
@@ -173,7 +219,7 @@ export function TimeSeriesChart({
         />
       </svg>
       <details className="mt-1 text-xs text-zinc-500">
-        <summary className="cursor-pointer">Table view</summary>
+        <summary className="cursor-pointer">{t("chart.table")}</summary>
         <table className="mt-1 w-full tabular-nums">
           <tbody>
             {data

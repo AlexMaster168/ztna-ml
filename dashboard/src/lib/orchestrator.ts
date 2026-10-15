@@ -3,6 +3,8 @@ import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { LOCALE_COOKIE } from "@/i18n";
+
 import { ACCESS_COOKIE } from "./session";
 
 export const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL ?? "http://localhost:8000";
@@ -14,7 +16,7 @@ export type Health = {
 };
 
 export type Role = "viewer" | "analyst" | "admin";
-export type Me = { id: number; username: string; role: Role };
+export type Me = { id: number; username: string; role: Role; sso?: boolean };
 
 export type PeerStatus = "active" | "quarantined" | "revoked";
 export type Peer = {
@@ -45,6 +47,7 @@ export type Gateway = {
   applied_revision: number;
   in_sync: boolean;
   last_seen_at: string | null;
+  peer_count: number | null;
 };
 
 export type AuditEntry = {
@@ -73,7 +76,8 @@ export class ApiError extends Error {
 
 /** Authenticated call to the orchestrator using the session's access token. */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = (await cookies()).get(ACCESS_COOKIE)?.value;
+  const jar = await cookies();
+  const token = jar.get(ACCESS_COOKIE)?.value;
   if (!token) redirect("/login");
   const res = await fetch(`${ORCHESTRATOR_URL}${path}`, {
     ...init,
@@ -81,6 +85,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      // API error messages come back in the user's language.
+      "Accept-Language": jar.get(LOCALE_COOKIE)?.value ?? "uk",
       ...init.headers,
     },
   });
@@ -185,6 +191,7 @@ export type WindowSnapshot = {
   status_404: number;
   auth_failures: number;
   bytes_out: number;
+  denied?: number;
   user_agents: string[];
   anomaly_ratio: number | null;
 };
@@ -197,6 +204,108 @@ export type RecentRequest = {
   status: number;
   bytes_sent: number;
   ua: string;
+  /** refused by the gateway's access policy */
+  denied?: boolean;
 };
 
 export type PeerMetrics = { history: WindowSnapshot[]; recent_requests: RecentRequest[] };
+
+export type AccessDecision = "allowed" | "disabled" | "peer_not_active" | "not_in_group" | "low_trust";
+export type PeerAccess = {
+  groups: string[];
+  resources: { resource: string; path_prefix: string; min_trust: number; decision: AccessDecision }[];
+};
+
+export type Resource = {
+  id: number;
+  name: string;
+  description: string;
+  path_prefix: string;
+  upstream: string;
+  min_trust: number;
+  groups: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PeerGroup = {
+  id: number;
+  name: string;
+  description: string;
+  peers: number[];
+  resources: string[];
+};
+
+export type NotificationChannel = {
+  id: number;
+  name: string;
+  kind: "webhook" | "slack" | "telegram";
+  url: string;
+  has_secret: boolean;
+  telegram_chat_id: string;
+  events: string[];
+  min_severity: "low" | "medium" | "high" | "critical";
+  enabled: boolean;
+  created_at: string;
+};
+
+export type Delivery = {
+  id: number;
+  channel: number;
+  channel_name: string;
+  event: string;
+  severity: string;
+  text: string;
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  last_error: string;
+  created_at: string;
+  sent_at: string | null;
+};
+
+export type MLOpsSettings = {
+  auto_retrain: boolean;
+  retrain_interval_hours: number;
+  drift_threshold: number;
+  model_kind: "lstm" | "dense";
+  train_real_minutes: number;
+  auto_shadow: boolean;
+  auto_promote: boolean;
+  promote_min_windows: number;
+  promote_max_rate: number;
+  updated_at: string;
+};
+
+export type LiveModelStats = {
+  version: string;
+  windows: number;
+  anomalies: number;
+  anomaly_rate: number | null;
+  disagreements: number;
+};
+
+export type DriftReport = {
+  version: string;
+  status: "collecting_reference" | "collecting" | "ok";
+  windows: number;
+  score?: number;
+  top_features?: Record<string, number>;
+};
+
+export type LiveStatus = {
+  active: LiveModelStats | null;
+  shadow: LiveModelStats | null;
+  workers: { name: string; active: string | null; shadow: string | null; shards: number[]; seen_at: number }[];
+  drift: DriftReport | null;
+  trainer: Record<string, string> | null;
+};
+
+/** First error message of a DRF error body. */
+export function errorMessage(e: unknown, fallback: string): string {
+  if (!(e instanceof ApiError)) return fallback;
+  const first = Object.values(e.body)[0];
+  if (Array.isArray(first)) return String(first[0]);
+  if (typeof first === "string") return first;
+  return e.message;
+}

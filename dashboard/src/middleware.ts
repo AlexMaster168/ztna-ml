@@ -39,5 +39,5 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   runtime: "nodejs",
-  matcher: ["/((?!login|_next/|favicon.ico).*)"],
+  matcher: ["/((?!login|api/auth/|_next/|favicon.ico|robots.txt).*)"],
 };

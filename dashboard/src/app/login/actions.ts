@@ -3,12 +3,14 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getT } from "@/i18n/server";
 import { ORCHESTRATOR_URL } from "@/lib/orchestrator";
 import { ACCESS_COOKIE, REFRESH_COOKIE, cookieOptions } from "@/lib/session";
 
 export type LoginState = { error?: string };
 
 export async function login(_: LoginState, form: FormData): Promise<LoginState> {
+  const t = await getT();
   const res = await fetch(`${ORCHESTRATOR_URL}/api/auth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -16,9 +18,9 @@ export async function login(_: LoginState, form: FormData): Promise<LoginState> 
     cache: "no-store",
   }).catch(() => null);
 
-  if (!res) return { error: "Orchestrator is unreachable" };
-  if (res.status === 429) return { error: "Too many attempts, try again in a minute" };
-  if (!res.ok) return { error: "Invalid username or password" };
+  if (!res) return { error: t("login.unreachable") };
+  if (res.status === 429) return { error: t("login.throttled") };
+  if (!res.ok) return { error: t("login.invalid") };
 
   const { access, refresh } = (await res.json()) as { access: string; refresh: string };
   const jar = await cookies();
@@ -27,11 +29,4 @@ export async function login(_: LoginState, form: FormData): Promise<LoginState> 
 
   const next = String(form.get("next") || "/");
   redirect(next.startsWith("/") && !next.startsWith("//") ? next : "/");
-}
-
-export async function logout() {
-  const jar = await cookies();
-  jar.delete(ACCESS_COOKIE);
-  jar.delete(REFRESH_COOKIE);
-  redirect("/login");
 }

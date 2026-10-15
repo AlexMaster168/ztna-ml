@@ -17,14 +17,23 @@ const styles: Record<string, string> = {
   available: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
   shadow: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
   syncing: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  allowlisted: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  // access decisions / deliveries
+  allowed: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  sent: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  low_trust: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  pending: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  training: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  failed: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
 };
 
-export function StatusBadge({ status }: { status: string }) {
+/** Colour comes from the status code; the text is passed in already translated. */
+export function StatusBadge({ status, label }: { status: string; label?: string }) {
   return (
     <span
       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.revoked}`}
     >
-      {status}
+      {label ?? status}
     </span>
   );
 }

@@ -2,19 +2,22 @@
 
 import { useActionState } from "react";
 
+import { useT } from "@/i18n/client";
+
 import { login, type LoginState } from "./actions";
 
 export function LoginForm({ next }: { next: string }) {
+  const t = useT();
   const [state, action, pending] = useActionState<LoginState, FormData>(login, {});
   return (
     <form action={action} className="mt-6 space-y-4">
       <input type="hidden" name="next" value={next} />
       <label className="block text-sm">
-        Username
+        {t("login.username")}
         <input name="username" required autoComplete="username" className="input mt-1" />
       </label>
       <label className="block text-sm">
-        Password
+        {t("login.password")}
         <input
           name="password"
           type="password"
@@ -28,8 +31,8 @@ export function LoginForm({ next }: { next: string }) {
           {state.error}
         </p>
       )}
-      <button type="submit" disabled={pending} className="btn btn-primary w-full">
-        {pending ? "Signing in…" : "Sign in"}
+      <button type="submit" disabled={pending} className="btn btn-secondary w-full">
+        {pending ? t("login.signingIn") : t("login.signIn")}
       </button>
     </form>
   );

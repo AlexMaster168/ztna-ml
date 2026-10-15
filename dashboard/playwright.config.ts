@@ -10,6 +10,8 @@ export default defineConfig({
   use: {
     baseURL: process.env.DASHBOARD_URL ?? "http://localhost:3000",
     viewport: { width: 1360, height: 900 },
+    // the UI defaults to Ukrainian; first visits follow the browser language
+    locale: "uk-UA",
     trace: "retain-on-failure",
   },
 });

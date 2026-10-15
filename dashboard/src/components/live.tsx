@@ -4,10 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { useT } from "@/i18n/client";
+import type { T } from "@/i18n";
+import { reasonText } from "@/lib/localize";
+
 import { clock } from "./format";
 
 export type LiveEvent = {
-  type: "anomaly" | "peer.status" | "peer.score" | string;
+  type: "anomaly" | "peer.status" | "peer.score" | "peer.access" | string;
   ts: number;
   peer_id?: number;
   name?: string;
@@ -58,18 +62,25 @@ export function LiveRefresh({ types, peerId }: { types: string[]; peerId?: numbe
   return null;
 }
 
-function describe(e: LiveEvent): string {
+function describe(t: T, e: LiveEvent): string {
   switch (e.type) {
     case "anomaly":
-      return `${e.source === "model" ? "model" : "rule"}: ${e.kind?.replaceAll("_", " ")} (−${e.penalty})`;
+      return `${t.v("source", e.source)}: ${t.v("kind", e.kind)} (−${e.penalty})`;
     case "peer.status":
-      return `${e.status}${e.reason ? ` — ${e.reason}` : ""} by ${e.actor}`;
+      return t("live.status", {
+        status: t.v("peerStatus", e.status),
+        reason: e.reason ? ` — ${reasonText(t, e.reason)}` : "",
+        actor: e.actor ?? "—",
+      });
+    case "peer.access":
+      return t("live.access", { score: Math.round(e.score ?? 0) });
     default:
-      return e.type;
+      return t.v("liveType", e.type);
   }
 }
 
 export function LiveFeed() {
+  const t = useT();
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const connected = useLive((e) => {
     if (e.type === "peer.score") return; // too chatty for a feed
@@ -78,17 +89,17 @@ export function LiveFeed() {
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between">
-        <h2 className="font-medium">Live events</h2>
+        <h2 className="font-medium">{t("live.title")}</h2>
         <span className="flex items-center gap-1.5 text-xs text-zinc-500">
           <span
             aria-hidden
             className={`inline-block size-2 rounded-full ${connected ? "bg-emerald-500" : "bg-zinc-400"}`}
           />
-          {connected ? "connected" : "reconnecting"}
+          {connected ? t("live.connected") : t("live.reconnecting")}
         </span>
       </div>
       {events.length === 0 ? (
-        <p className="mt-3 text-sm text-zinc-500">Waiting for events…</p>
+        <p className="mt-3 text-sm text-zinc-500">{t("live.waiting")}</p>
       ) : (
         <ul className="mt-3 divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
           {events.map((e, i) => (
@@ -98,10 +109,10 @@ export function LiveFeed() {
               </span>
               {e.peer_id ? (
                 <Link href={`/nodes/${e.peer_id}`} className="font-medium hover:underline">
-                  {e.name ?? `peer #${e.peer_id}`}
+                  {e.name ?? `#${e.peer_id}`}
                 </Link>
               ) : null}
-              <span className="text-zinc-700 dark:text-zinc-300">{describe(e)}</span>
+              <span className="text-zinc-700 dark:text-zinc-300">{describe(t, e)}</span>
             </li>
           ))}
         </ul>

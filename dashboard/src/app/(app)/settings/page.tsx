@@ -1,18 +1,16 @@
 import { ActionForm } from "@/components/action-form";
 import { formatTime } from "@/components/format";
+import { getT } from "@/i18n/server";
 import { saveEnforcement } from "@/lib/actions";
 import { api, can, type EnforcementSettings, type Me } from "@/lib/orchestrator";
 
 export const dynamic = "force-dynamic";
 
-const MODES = [
-  { value: "monitor", label: "Monitor only", hint: "score and open incidents, never isolate" },
-  { value: "auto_quarantine", label: "Auto-quarantine", hint: "isolate below the quarantine threshold" },
-  { value: "auto_revoke", label: "Auto-quarantine and revoke", hint: "also revoke below the revoke threshold" },
-];
+const MODES = ["monitor", "auto_quarantine", "auto_revoke"] as const;
 
 export default async function SettingsPage() {
-  const [me, cfg] = await Promise.all([
+  const [t, me, cfg] = await Promise.all([
+    getT(),
     api<Me>("/api/me"),
     api<EnforcementSettings>("/api/settings/enforcement"),
   ]);
@@ -35,45 +33,46 @@ export default async function SettingsPage() {
 
   return (
     <div className="max-w-2xl space-y-4">
-      <h1 className="text-2xl font-semibold">Enforcement</h1>
+      <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
       <p className="text-sm text-zinc-500">
-        Trust = 100 − Σ penalty·e<sup>−Δt/τ</sup>. Last changed {formatTime(cfg.updated_at)}.
+        {t("settings.formula")} Σ·e<sup>−Δt/τ</sup>.{" "}
+        {t("settings.changed", { at: formatTime(cfg.updated_at, t.locale) })}
       </p>
       <ActionForm action={saveEnforcement} className="card space-y-4 p-4">
         <fieldset className="space-y-2">
-          <legend className="text-sm font-medium">Mode</legend>
+          <legend className="text-sm font-medium">{t("settings.mode")}</legend>
           {MODES.map((m) => (
-            <label key={m.value} className="flex items-start gap-2 text-sm">
+            <label key={m} className="flex items-start gap-2 text-sm">
               <input
                 type="radio"
                 name="mode"
-                value={m.value}
-                defaultChecked={cfg.mode === m.value}
+                value={m}
+                defaultChecked={cfg.mode === m}
                 disabled={!admin}
                 className="mt-1"
               />
               <span>
-                {m.label} <span className="text-zinc-500">— {m.hint}</span>
+                {t.v("mode", m)} <span className="text-zinc-500">— {t.v("modeHint", m)}</span>
               </span>
             </label>
           ))}
         </fieldset>
         <div className="grid gap-4 sm:grid-cols-3">
-          {field("incident_below", "Open incident below")}
-          {field("quarantine_below", "Quarantine below")}
-          {field("revoke_below", "Revoke below")}
-          {field("release_above", "Release at or above")}
-          {field("min_quarantine_minutes", "Min quarantine (min)")}
-          {field("decay_minutes", "Decay τ (min)", "0.5")}
+          {field("incident_below", t("settings.incidentBelow"))}
+          {field("quarantine_below", t("settings.quarantineBelow"))}
+          {field("revoke_below", t("settings.revokeBelow"))}
+          {field("release_above", t("settings.releaseAbove"))}
+          {field("min_quarantine_minutes", t("settings.minQuarantine"))}
+          {field("decay_minutes", t("settings.decay"), "0.5")}
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" name="auto_release" defaultChecked={cfg.auto_release} disabled={!admin} />
-          Release automatic quarantines when trust recovers
+          {t("settings.autoRelease")}
         </label>
         {admin ? (
-          <button className="btn btn-primary">Save</button>
+          <button className="btn btn-primary">{t("common.save")}</button>
         ) : (
-          <p className="text-sm text-zinc-500">Only admins can change enforcement.</p>
+          <p className="text-sm text-zinc-500">{t("settings.adminOnly")}</p>
         )}
       </ActionForm>
     </div>
